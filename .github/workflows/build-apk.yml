@@ -22,6 +22,8 @@ jobs:
           gradle-version: '8.9'
       - name: Preparar Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
       - name: Instalar herramientas SDK
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Compilar APK debug
