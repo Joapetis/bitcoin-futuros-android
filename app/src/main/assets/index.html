@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#101827"><title>BTC Simulador</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101827;color:#eef2ff;font:16px system-ui;padding:18px}.card{background:#1d293b;border:1px solid #334155;border-radius:16px;padding:16px;margin:12px 0}h1{font-size:24px;margin:4px 0}small,.muted{color:#aab7cc}.price{font-size:32px;font-weight:800}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.value{font-size:22px;font-weight:700}button{border:0;border-radius:12px;padding:14px;font-size:16px;font-weight:700;color:white;width:100%;margin-top:8px}.long{background:#0b9f72}.short{background:#d94b58}.close{background:#475569}.reset{background:#334155}.pill{display:inline-block;background:#334155;padding:5px 10px;border-radius:99px;font-size:12px}
+</style></head><body>
+<h1>₿ Bitcoin · Simulador</h1><span class="pill">SOLO SIMULACIÓN · SIN ÓRDENES REALES</span>
+<div class="card"><small>BTC/USD · Coinbase</small><div class="price" id="price">Conectando…</div><div class="muted" id="status">Intentando obtener precio público</div></div>
+<div class="grid"><div class="card"><small>Saldo simulado</small><div class="value" id="balance">$100.00</div></div><div class="card"><small>Beneficio/pérdida total</small><div class="value" id="pnl">$0.00</div></div><div class="card"><small>Posición</small><div class="value" id="position">Sin posición</div></div><div class="card"><small>P/L abierto</small><div class="value" id="openpnl">$0.00</div></div></div>
+<div class="card"><div class="grid"><div><small>Apalancamiento simulado</small><div class="value">x100</div></div><div><small>Umbral señal</small><div class="value">31 puntos</div></div><div><small>Riesgo por operación</small><div class="value">0,5%</div></div><div><small>Stop orientativo</small><div class="value">1,5 × ATR*</div></div></div><small>*Esta primera versión no calcula aún ATR ni genera señales automáticas validadas.</small></div>
+<button class="long" onclick="openPos('LONG')">Abrir LONG (simulado)</button><button class="short" onclick="openPos('SHORT')">Abrir SHORT (simulado)</button><button class="close" onclick="closePos()">Cerrar posición</button><button class="reset" onclick="resetSim()">Reiniciar saldo simulado</button>
+<div class="card"><b>Historial</b><div id="history" class="muted">Aún no hay operaciones.</div></div>
+<script>
+let price=null,balance=100,total=0,pos=null,entry=0,qty=0,history=[];
+const fmt=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
+async function tick(){try{let r=await fetch('https://api.coinbase.com/v2/prices/BTC-USD/spot',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);let j=await r.json();price=Number(j.data.amount);document.getElementById('price').textContent=fmt(price);document.getElementById('status').textContent='Precio público actualizado: '+new Date().toLocaleTimeString();render()}catch(e){document.getElementById('status').textContent='Sin datos en este momento. Comprueba internet e inténtalo de nuevo.'}}
+function openPos(side){if(price===null)return alert('Esperando precio real de referencia.');if(pos)return alert('Cierra primero la posición actual.');pos=side;entry=price;qty=(balance*.005*100)/Math.max(price*.015,1);render();log('Abierta '+side+' a '+fmt(entry)+' (simulado)')}
+function closePos(){if(!pos)return alert('No hay posición abierta.');let p=(price-entry)*qty*(pos==='LONG'?1:-1);balance+=p;total+=p;log('Cerrada '+pos+' a '+fmt(price)+' · P/L '+fmt(p));pos=null;qty=0;render()}
+function resetSim(){if(!confirm('¿Reiniciar saldo e historial simulado?'))return;balance=100;total=0;pos=null;qty=0;history=[];render()}
+function log(s){history.unshift(new Date().toLocaleTimeString()+' — '+s);document.getElementById('history').innerHTML=history.map(x=>'<div>'+x+'</div>').join('')}
+function render(){let op=pos&&price!==null?(price-entry)*qty*(pos==='LONG'?1:-1):0;document.getElementById('balance').textContent=fmt(balance);document.getElementById('pnl').textContent=fmt(total);document.getElementById('position').textContent=pos?(pos+' @ '+fmt(entry)):'Sin posición';document.getElementById('openpnl').textContent=fmt(op)}
+tick();setInterval(tick,5000);
+</script></body></html>
