@@ -289,7 +289,7 @@ let lastTradePrice=null, lastTradeAt=0, reconnectTimer=null, reconnectDelay=1500
 let pend=null, watchSide=0, holdMsg='', cooldownUntil=0, view=110, hover=null, geom=null;
 let feed=[], feedVer=0, histVer=0, lastPx=null;
 
-/* ---------- Datos en tiempo real: OKX primero, Bybit segundo, Binance tercero ---------- */
+/* ---------- Datos en tiempo real: OKX y Bybit ---------- */
 function setStatus(txt,cls){$('src').textContent=txt;$('dot').className='dot '+cls;}
 async function fetchT(url){const ac=new AbortController();const t=setTimeout(()=>ac.abort(),7000);try{const r=await fetch(url,{signal:ac.signal,cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);return r;}finally{clearTimeout(t);}}
 async function start(){
@@ -298,7 +298,7 @@ async function start(){
   if(ws){try{ws.onclose=null;ws.close();}catch(e){}ws=null;}
   candles=[];ind=null;lastA=null;funding=null;lastMsg=0;lastTradePrice=null;lastTradeAt=0;lastWsMessageAt=0;dirty=false;
   setStatus('Conectando','wait');
-  const sources=['okx','bybit','binance'];
+  const sources=['okx','bybit'];
   for(const src of sources.slice(sourceOffset).concat(sources.slice(0,sourceOffset))){
     try{await loadSource(src,id);return;}catch(e){console.warn(src,e);if(id!==conn)return;}
   }
@@ -307,11 +307,7 @@ async function start(){
 }
 async function loadSource(src,id){
   const tf=TFS[S.tf];let hist;
-  if(src==='binance'){
-    const a=await (await fetchT(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=${tf.bn}&limit=500`)).json();
-    if(!Array.isArray(a))throw new Error('respuesta inválida de Binance');
-    hist=a.map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]}));
-  }else if(src==='bybit'){
+  if(src==='bybit'){
     const j=await (await fetchT(`https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=${tf.by}&limit=500`)).json();
     if(j.retCode!==0||!j.result||!Array.isArray(j.result.list))throw new Error('respuesta inválida de Bybit');
     hist=j.result.list.map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]})).reverse();
@@ -327,7 +323,7 @@ async function loadSource(src,id){
 }
 function openWS(src,id){return new Promise((res,rej)=>{
   const tf=TFS[S.tf];
-  const url=src==='binance'?`wss://fstream.binance.com/stream?streams=btcusdt@kline_${tf.bn}/btcusdt@aggTrade/btcusdt@markPrice@1s`:src==='bybit'?'wss://stream.bybit.com/v5/public/linear':'wss://ws.okx.com:8443/ws/v5/public';
+  const url=src==='bybit'?'wss://stream.bybit.com/v5/public/linear':'wss://ws.okx.com:8443/ws/v5/public';
   const w=new WebSocket(url);let opened=false;
   const to=setTimeout(()=>{if(!opened){try{w.close();}catch(e){}rej(new Error('timeout'));}},7000);
   w.onopen=()=>{
@@ -335,26 +331,16 @@ function openWS(src,id){return new Promise((res,rej)=>{
     if(src==='bybit'){w.send(JSON.stringify({op:'subscribe',args:[`kline.${tf.by}.BTCUSDT`,'tickers.BTCUSDT']}));
       const p=setInterval(()=>{if(w.readyState===1)w.send('{"op":"ping"}');else clearInterval(p);},20000);}
     else if(src==='okx'){w.send(JSON.stringify({op:'subscribe',args:[{channel:tf.ok,instId:'BTC-USDT-SWAP'},{channel:'tickers',instId:'BTC-USDT-SWAP'}]}));}
-    setStatus(src==='binance'?'Binance Futures':src==='bybit'?'Bybit Futures':'OKX Futures','ok');res();
+    setStatus(src==='bybit'?'Bybit Futures':'OKX Futures','ok');res();
   };
   w.onmessage=e=>{if(id!==conn)return;lastWsMessageAt=Date.now();try{onMsg(src,JSON.parse(e.data));}catch(x){}};
   w.onerror=()=>{if(!opened){clearTimeout(to);rej(new Error('ws'));}};
-  w.onclose=()=>{if(id===conn&&opened){sourceOffset=(['okx','bybit','binance'].indexOf(src)+1)%3;setStatus('Cambiando fuente / reconectando','wait');if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(id===conn)start();},Math.min(5000,reconnectDelay)+Math.random()*500);reconnectDelay=Math.min(20000,reconnectDelay*1.5);}};
+  w.onclose=()=>{if(id===conn&&opened){sourceOffset=(['okx','bybit'].indexOf(src)+1)%2;setStatus('Cambiando fuente / reconectando','wait');if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(id===conn)start();},Math.min(5000,reconnectDelay)+Math.random()*500);reconnectDelay=Math.min(20000,reconnectDelay*1.5);}};
 });}
 setInterval(()=>{if(ws&&ws.readyState===1&&Date.now()-lastWsMessageAt>18000){try{ws.close();}catch(e){}}},5000);
 function onMsg(src,m){
   lastMsg=Date.now();
-  if(src==='binance'){
-    const d=m.data;if(!d)return;
-    if(d.e==='kline'){
-      const k=d.k,c={t:+k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,v:+k.v},L=candles[candles.length-1];
-      // No permitir que una actualización de vela más antigua pise el último precio negociado.
-      if(L&&L.t===c.t&&lastTradeAt>+d.E){c.c=L.c;c.h=Math.max(c.h,L.h);c.l=Math.min(c.l,L.l);}
-      upsert(c);
-    }
-    else if(d.e==='aggTrade'){applyTick(+d.p,+d.T);}
-    else if(d.e==='markPriceUpdate'){funding=+d.r;}
-  }else if(src==='bybit'&&m.topic){
+  if(src==='bybit'&&m.topic){
     if(m.topic.startsWith('kline.')){for(const k of m.data)upsert({t:+k.start,o:+k.open,h:+k.high,l:+k.low,c:+k.close,v:+k.volume});}
     else if(m.topic.startsWith('tickers.')&&m.data){if(m.data.fundingRate!=null)funding=+m.data.fundingRate;if(m.data.lastPrice!=null)applyTick(+m.data.lastPrice,+m.ts||Date.now());}
   }else if(src==='okx'&&m.arg&&Array.isArray(m.data)){
@@ -651,8 +637,8 @@ function updateUI(now){
     const tfms=TFS[S.tf].s*1000;$('candleCd').textContent=mmss((Math.floor(now/tfms)+1)*tfms-now);
   }
   $('fund').textContent=funding==null?'–':(funding*100).toFixed(4)+'%';
-  if(!fresh()&&candles.length&&$('dot').className.includes('ok'))setStatus(source==='binance'?'Binance (sin datos)':source==='bybit'?'Bybit (sin datos)':'OKX (sin datos)','wait');
-  else if(fresh()&&$('dot').className.includes('wait')&&ws&&ws.readyState===1)setStatus(source==='binance'?'Binance Futures':source==='bybit'?'Bybit Futures':'OKX Futures','ok');
+  if(!fresh()&&candles.length&&$('dot').className.includes('ok'))setStatus(source==='bybit'?'Bybit (sin datos)':'OKX (sin datos)','wait');
+  else if(fresh()&&$('dot').className.includes('wait')&&ws&&ws.readyState===1)setStatus(source==='bybit'?'Bybit Futures':'OKX Futures','ok');
 
   const a=lastA,op=$('op'),P=B.pos;
   let state='watch',side=0;
@@ -690,7 +676,7 @@ function updateUI(now){
     $('kSL').style.left=pos(P.sl);$('kE').style.left=pos(P.entry);$('kT1').style.left=pos(P.tp1);$('kT2').style.left=pos(P.tp2);$('kP').style.left=pos(px);
   }else{
     if(!a)msg='Cargando datos de mercado.';
-    else if(!fresh())msg='Sin ticks recientes de OKX/Bybit/Binance: no se abrirán operaciones con precio obsoleto. El bot intentará cambiar de fuente automáticamente; comprueba la conexión del VPS si persiste.';
+    else if(!fresh())msg='Sin ticks recientes de OKX/Bybit: no se abrirán operaciones con precio obsoleto. El bot intentará cambiar de fuente automáticamente; comprueba la conexión del VPS si persiste.';
     else if(now<cooldownUntil)msg=`Pausa tras la última operación (${mmss(cooldownUntil-now)}).`;
     else if(holdMsg)msg=holdMsg;
     else if(watchSide){badge=`Posible ${watchSide>0?'compra':'venta'}`;msg=`Puntuación aún por confirmar: se exige ${S.thr} puntos y ${MIN_AGREE} estrategias. Si se confirma, la operación simulada se abrirá automáticamente tras ${S.notice} s.`;}
