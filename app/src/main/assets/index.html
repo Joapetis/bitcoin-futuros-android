@@ -551,7 +551,7 @@ function entryRiskBlock(now){
 function pendTicks(now){
   const rem=pend.due-now;
   if(!pend.warned10&&rem<=10000){pend.warned10=true;
-    const txt=pend.type==='ENTER'?`En 10 segundos: ${sideWord(pend.side)}. Prepara la orden, entrada ≈ ${fmt(pend.plan.entry,1)} y stop loss en ${fmt(pend.plan.sl,1)}.`:`En 10 segundos se cierra la posición por señal contraria.`;
+    const txt=pend.type==='ENTER'?`En 10 segundos se abrirá automáticamente la operación simulada si la señal sigue confirmada. Entrada ≈ ${fmt(pend.plan.entry,1)}; stop loss y objetivos se gestionan automáticamente.`:`En 10 segundos se cierra la posición por señal contraria.`;
     alertUser('warn','Faltan 10 segundos',txt,{say:pend.type==='ENTER'?`Diez segundos para la ${pend.side>0?'compra':'venta'}`:'Diez segundos para cerrar la posición'});}
   const sec=Math.ceil(rem/1000);
   if(rem<=3000&&rem>0&&sec!==pend.lastSec){pend.lastSec=sec;beep([980],0.07,'square',0.03);}
@@ -583,7 +583,7 @@ function stepBot(a,now){
     pend={type:'ENTER',side:sg,start:now,due:now+S.notice*1000,plan:pl,warned10:S.notice<=10,lastSec:null};
     watchSide=sg;
     alertUser(sg>0?'long':'short',`Señal de ${sideWord(sg)} (${sg>0?'long':'short'})`,
-      `Entrada en ${S.notice} s a ≈ ${fmt(pl.entry,1)}. Coloca el stop loss en ${fmt(pl.sl,1)}, objetivos en ${fmt(pl.tp1,1)} y ${fmt(pl.tp2,1)}.`,
+      `La operación simulada se abrirá automáticamente en ${S.notice} s si la señal continúa válida. Entrada ≈ ${fmt(pl.entry,1)}; stop loss ${fmt(pl.sl,1)} y objetivos ${fmt(pl.tp1,1)} / ${fmt(pl.tp2,1)} se gestionan automáticamente.`,
       {say:`Señal de ${sg>0?'compra':'venta'}. Entrada en ${S.notice} segundos`,ttl:12000});
   }else{
     const w=mag>=thr*0.75?sg:0;
@@ -669,7 +669,7 @@ function updateUI(now){
     if(pend.type==='ENTER'){
       badge=`${sideWord(pend.side)} en ${mmss(rem)}`;
       const pl=pend.plan,dist=pl.stopDist/pl.entry*100;
-      msg=`Prepara la orden ${pend.side>0?'larga (long)':'corta (short)'}. Coloca el stop loss en ${fmt(pl.sl,1)}, a ${dist.toFixed(2)}% de la entrada.`;
+      msg=`El bot abrirá automáticamente la operación simulada si se mantiene la señal. Stop loss automático a ${fmt(pl.sl,1)} (${dist.toFixed(2)}% de la entrada).`;
       $('cdLbl').textContent='segundos para entrar';
       bar={t:`${sideWord(pend.side)} (${pend.side>0?'long':'short'}) - entrada ≈ ${fmt(pl.entry,1)}, stop loss ${fmt(pl.sl,1)}`,cd:mmss(rem)};
       fillPlan(pl,sizing(pl),false);
@@ -684,7 +684,7 @@ function updateUI(now){
     const px=L?L.c:P.entry,u=P.realized+P.side*(px-P.entry)*P.qty-px*P.qty*FEE;
     $('upnl').textContent=sgnStr(u);$('upnl').className=u>=0?'pos':'neg';
     $('upnlR').textContent=`${sgnStr(u/P.risk,1)} R, ${P.tp1Hit?'objetivo 1 cumplido':'stop sin mover'}`;
-    msg=P.tp1Hit?'Stop protegido. El bot sigue al precio y avisará cuando debas subir o bajar el stop loss.':'Mantén el stop loss en su sitio. Se avisará al llegar al objetivo 1.';
+    msg=P.tp1Hit?'Objetivo 1 cumplido. El bot gestiona automáticamente el stop dinámico y el cierre.':'El bot gestiona automáticamente el stop loss y los objetivos; no tienes que colocar órdenes manuales.';
     fillPlan({entry:P.entry,sl:P.sl,tp1:P.tp1,tp2:P.tp2},{qty:P.qty,risk:P.risk},true);
     const vals=[P.sl,P.entry,P.tp1,P.tp2,px],mn=Math.min(...vals),mx=Math.max(...vals),pos=v=>((v-mn)/(mx-mn||1)*92+4)+'%';
     $('kSL').style.left=pos(P.sl);$('kE').style.left=pos(P.entry);$('kT1').style.left=pos(P.tp1);$('kT2').style.left=pos(P.tp2);$('kP').style.left=pos(px);
@@ -693,7 +693,7 @@ function updateUI(now){
     else if(!fresh())msg='Sin ticks recientes de OKX/Bybit/Binance: no se abrirán operaciones con precio obsoleto. El bot intentará cambiar de fuente automáticamente; comprueba la conexión del VPS si persiste.';
     else if(now<cooldownUntil)msg=`Pausa tras la última operación (${mmss(cooldownUntil-now)}).`;
     else if(holdMsg)msg=holdMsg;
-    else if(watchSide){badge=`Posible ${watchSide>0?'compra':'venta'}`;msg='Se está formando confluencia. Falta poco para avisar.';}
+    else if(watchSide){badge=`Posible ${watchSide>0?'compra':'venta'}`;msg=`Puntuación aún por confirmar: se exige ${S.thr} puntos y ${MIN_AGREE} estrategias. Si se confirma, la operación simulada se abrirá automáticamente tras ${S.notice} s.`;}
     if(a){$('cd').textContent=(a.score>=0?'+':'')+Math.round(a.score);$('cdLbl').textContent='puntuación';
       ring.style.strokeDashoffset=C*(1-clamp(Math.abs(a.score)/S.thr,0,1));}
   }
