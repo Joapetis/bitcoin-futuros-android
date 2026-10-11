@@ -134,7 +134,7 @@ object NativeTradingEngine {
             val trend = ((ema9-ema21)/close*100.0).coerceIn(-3.0,3.0)
             val regime = if (abs(ema50-ema200)/close > 0.004) "TENDENCIA" else "RANGO"
             val nn = (b.optDouble("nnBias") + b.optDouble("nnTrend")*(trend/3.0).coerceIn(-1.0,1.0) + b.optDouble("nnMomentum")*((returns*100)/5.0).coerceIn(-1.0,1.0)).coerceIn(-1.0,1.0)
-            val strategy = strategyFor(symbol)
+            val strategy = strategyName(symbol)
             val signal = strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200, rsi, atr, regime, returns)
             b.put("strategy", strategy)
             b.put("lastSignal", "$strategy · $regime · RSI ${rsi.toInt()} · Señal $signal")
@@ -175,7 +175,7 @@ object NativeTradingEngine {
     }
 
     // Cada símbolo tiene una familia de señales propia; no se comparte un score genérico.
-    private fun strategyFor(symbol: String): String = when(symbol) {
+    fun strategyName(symbol: String): String = when(symbol) {
         "BTC-USDT" -> "Tendencia EMA + breakout"
         "ETH-USDT" -> "Cruce EMA + momentum RSI"
         "SOL-USDT" -> "Ruptura de volatilidad ATR"
