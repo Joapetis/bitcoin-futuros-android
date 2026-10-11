@@ -79,7 +79,7 @@ class BotKeepAliveService : Service() {
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
         return builder.setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .setContentTitle("Crypto Futures · Alpha 0.1")
+            .setContentTitle("Crypto Futures · v0.2")
             .setContentText("P/L: ${String.format(Locale.US, "%.2f", pnl)} USDT · Capital: ${String.format(Locale.US, "%.2f", capital)} USDT")
             .setStyle(Notification.BigTextStyle().bigText(
                 "P/L global: ${String.format(Locale.US, "%.2f", pnl)} USDT\nCapital simulado: ${String.format(Locale.US, "%.2f", capital)} USDT\nMejor bot: $best\n$status\nSolo simulación: no se envían órdenes reales."))
@@ -90,7 +90,7 @@ class BotKeepAliveService : Service() {
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, "Estado del simulador", NotificationManager.IMPORTANCE_LOW)
-            channel.description = "Ejecución nativa y resultados de Crypto Futures Alpha"
+            channel.description = "Ejecución nativa y resultados de Crypto Futures"
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
