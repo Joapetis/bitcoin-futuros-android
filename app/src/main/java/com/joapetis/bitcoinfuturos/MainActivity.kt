@@ -25,6 +25,8 @@ class MainActivity : Activity() {
     private val handler=Handler(Looper.getMainLooper())
     private lateinit var root:LinearLayout; private lateinit var content:LinearLayout; private lateinit var summary:TextView
     private var detailPrice:TextView? = null; private var liveChart:View? = null
+    private val marketPriceViews = mutableMapOf<String, TextView>()
+    private val sparklineViews = mutableListOf<View>()
     private var page="Inicio"; private var selected="BTC-USDT"
     private val symbols=listOf("BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","DOGE-USDT","BNB-USDT","LINK-USDT","ADA-USDT","AVAX-USDT","SUI-USDT")
     private fun dp(value:Int):Int = (value * resources.displayMetrics.density + 0.5f).toInt()
@@ -38,7 +40,13 @@ class MainActivity : Activity() {
         if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.O) startForegroundService(service) else startService(service)
         render(); handler.post(refreshRunnable)
     }
-    private val refreshRunnable=object:Runnable { override fun run(){ if(::root.isInitialized){ updateSummary(); detailPrice?.let { priceView -> NativeTradingEngine.snapshots().firstOrNull{it.symbol==selected}?.let { b -> priceView.text=if(b.price>0)String.format(Locale.US,"%,.2f",b.price) else "Esperando precio…" } }; liveChart?.invalidate() }; handler.postDelayed(this,4000) } }
+    private val refreshRunnable=object:Runnable { override fun run(){ if(::root.isInitialized){
+        updateSummary()
+        val snapshots=NativeTradingEngine.snapshots()
+        snapshots.forEach { snap -> marketPriceViews[snap.symbol]?.text=if(snap.price>0)String.format(Locale.US,"%,.4f",snap.price) else "—" }
+        detailPrice?.let { priceView -> snapshots.firstOrNull{it.symbol==selected}?.let { snap -> priceView.text=if(snap.price>0)String.format(Locale.US,"%,.2f",snap.price) else "Esperando precio…" } }
+        sparklineViews.forEach { it.invalidate() }; liveChart?.invalidate()
+    }; handler.postDelayed(this,4000) } }
 
     private fun render() {
         root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setBackgroundColor(bg)}
@@ -76,6 +84,8 @@ class MainActivity : Activity() {
         val bots=NativeTradingEngine.snapshots(); val pnl=bots.sumOf{it.pnl}
         updateSummary()
         content.removeAllViews()
+        marketPriceViews.clear()
+        sparklineViews.clear()
         when(page) {
             "Inicio" -> {
                 overviewCard(pnl, 1000.0 + pnl)
@@ -139,9 +149,13 @@ class MainActivity : Activity() {
         val names=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(10),0,0,0)}
         names.addView(text(b.symbol.substringBefore("-"),14f,Color.WHITE,true)); names.addView(text(when(b.symbol){"BTC-USDT"->"Bitcoin";"ETH-USDT"->"Ethereum";"SOL-USDT"->"Solana";"DOGE-USDT"->"Dogecoin";else->b.symbol.substringBefore("-")},10f,muted,false))
         row.addView(names,LinearLayout.LayoutParams(0,-2,1f))
-        row.addView(sparkline(b.symbol),LinearLayout.LayoutParams(dp(42),dp(24)).apply{setMargins(dp(5),0,dp(7),0)})
+        val spark=sparkline(b.symbol)
+        sparklineViews.add(spark)
+        row.addView(spark,LinearLayout.LayoutParams(dp(42),dp(24)).apply{setMargins(dp(5),0,dp(7),0)})
         val quote=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.END}
-        quote.addView(text(if(b.price>0)String.format(Locale.US,"%,.4f",b.price)else "—",12f,Color.WHITE,true))
+        val priceText=text(if(b.price>0)String.format(Locale.US,"%,.4f",b.price)else "—",12f,Color.WHITE,true)
+        marketPriceViews[b.symbol]=priceText
+        quote.addView(priceText)
         val change=NativeTradingEngine.marketChange24h(b.symbol)
         quote.addView(text(String.format(Locale.US,"%+.2f%%",change),11f,if(change>=0)green else Color.RED,true))
         row.addView(quote,LinearLayout.LayoutParams(-2,-2))
