@@ -124,8 +124,9 @@ class MainActivity : Activity() {
                     override fun onNothingSelected(p:AdapterView<*>?){}
                     override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){
                         val next=intervals[pos]
-                        if(chartBar!=next){chartBar=next;liveChart?.invalidate();NativeTradingEngine.requestChartCandles(selected,chartBar){handler.post{liveChart?.invalidate()}}
+                        if(chartBar!=next){chartBar=next;liveChart?.invalidate();NativeTradingEngine.requestChartCandles(selected,chartBar){handler.post{liveChart?.invalidate()}}}
                     }
+                }
                 }
                 intervalRow.addView(intervalSpinner,LinearLayout.LayoutParams(dp(112),dp(42)))
                 content.addView(intervalRow)
