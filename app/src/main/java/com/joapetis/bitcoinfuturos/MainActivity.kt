@@ -61,7 +61,7 @@ class MainActivity : Activity() {
             nav.addView(b, LinearLayout.LayoutParams(0,48,1f))
         }
         root.addView(nav)
-        val scroll=ScrollView(this).apply { fillViewport=true }
+        val scroll=ScrollView(this).apply { isFillViewport=true }
         content=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(16,8,16,28) }
         scroll.addView(content)
         root.addView(scroll, LinearLayout.LayoutParams(-1,0,1f))
