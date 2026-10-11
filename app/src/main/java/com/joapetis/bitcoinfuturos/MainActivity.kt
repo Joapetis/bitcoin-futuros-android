@@ -4,7 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
@@ -14,166 +17,131 @@ import android.view.Gravity
 import android.view.View
 import android.widget.*
 import java.util.Locale
+import kotlin.math.sin
 
 class MainActivity : Activity() {
-    private val bg = Color.rgb(7, 11, 17)
-    private val card = Color.rgb(17, 25, 37)
-    private val accent = Color.rgb(42, 214, 170)
-    private val muted = Color.rgb(142, 157, 177)
-    private val handler = Handler(Looper.getMainLooper())
-    private lateinit var root: LinearLayout
-    private lateinit var content: LinearLayout
-    private lateinit var summary: TextView
-    private var page = "Inicio"
-    private var selected = "BTC-USDT"
-    private val money = { v: Double -> String.format(Locale.US, "%.2f USDT", v) }
+    private val bg=Color.rgb(5,10,17); private val card=Color.rgb(13,23,36)
+    private val blue=Color.rgb(30,132,255); private val green=Color.rgb(0,220,153); private val muted=Color.rgb(137,154,174)
+    private val handler=Handler(Looper.getMainLooper())
+    private lateinit var root:LinearLayout; private lateinit var content:LinearLayout; private lateinit var summary:TextView
+    private var page="Inicio"; private var selected="BTC-USDT"
+    private val symbols=listOf("BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","DOGE-USDT","BNB-USDT","LINK-USDT","ADA-USDT","AVAX-USDT","SUI-USDT")
+    private fun money(v:Double)=String.format(Locale.US,"%,.2f USDT",v)
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        window.statusBarColor = bg; window.navigationBarColor = bg
-        window.decorView.systemUiVisibility = 0
+    override fun onCreate(savedInstanceState:Bundle?) {
+        super.onCreate(savedInstanceState); window.statusBarColor=bg; window.navigationBarColor=bg
         NativeTradingEngine.init(this)
-        requestNotificationPermission()
-        startService(Intent(this, BotKeepAliveService::class.java).setAction(BotKeepAliveService.ACTION_START))
-        render()
-        handler.post(refreshRunnable)
+        if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),410)
+        val service=Intent(this,BotKeepAliveService::class.java).setAction(BotKeepAliveService.ACTION_START)
+        if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.O) startForegroundService(service) else startService(service)
+        render(); handler.post(refreshRunnable)
     }
-    private val refreshRunnable = object : Runnable {
-        override fun run() { if (::root.isInitialized) updateScreen(); handler.postDelayed(this, 3000) }
-    }
-
-    private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 410)
-    }
+    private val refreshRunnable=object:Runnable { override fun run(){ if(::root.isInitialized) updateScreen(); handler.postDelayed(this,4000) } }
 
     private fun render() {
-        root = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setBackgroundColor(bg) }
-        val top = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(20,18,20,10) }
-        top.addView(text("CRYPTO FUTURES", 22f, Color.WHITE, true))
-        top.addView(text("ALPHA 0.1  ·  SIMULADOR NATIVO", 11f, muted, true))
-        summary = text("Preparando los 10 bots…", 13f, accent, true)
-        top.addView(summary)
-        root.addView(top)
-        val nav = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; setPadding(8,6,8,6) }
+        root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setBackgroundColor(bg)}
+        val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(18,12,18,8)}
+        val brand=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        brand.addView(text("🔷  Crypto Futures",20f,Color.WHITE,true)); brand.addView(text("       Simulador de Futuros",11f,muted,false))
+        header.addView(brand,LinearLayout.LayoutParams(0,-2,1f)); header.addView(text("♧  ◉",20f,Color.WHITE,true)); root.addView(header)
+        summary=text("",11f,green,true).apply{setPadding(18,2,18,8)}; root.addView(summary)
+        val scroll=ScrollView(this).apply{isFillViewport=true;clipToPadding=false}
+        content=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(14,6,14,14)}; scroll.addView(content)
+        root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
+        val nav=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;setPadding(4,5,4,5);setBackgroundColor(Color.rgb(7,14,23))}
         listOf("Inicio","Mercados","Operaciones","Historial","Ajustes").forEach { name ->
-            val b=Button(this).apply { text=name; textSize=10f; isAllCaps=false; setTextColor(if(page==name) accent else Color.WHITE); setBackgroundColor(card); setOnClickListener { page=name; render() } }
-            nav.addView(b, LinearLayout.LayoutParams(0,48,1f))
+            val item=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(1,5,1,3);setOnClickListener{page=name;render()}}
+            item.addView(text(when(name){"Inicio"->"⌂";"Mercados"->"▥";"Operaciones"->"▣";"Historial"->"◷";else->"⚙"},20f,if(page==name)blue else muted,true))
+            item.addView(text(name,9f,if(page==name)blue else muted,false)); nav.addView(item,LinearLayout.LayoutParams(0,-2,1f))
         }
-        root.addView(nav)
-        val scroll=ScrollView(this).apply { isFillViewport=true }
-        content=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(16,8,16,28) }
-        scroll.addView(content)
-        root.addView(scroll, LinearLayout.LayoutParams(-1,0,1f))
-        setContentView(root)
-        updateScreen()
+        root.addView(nav); setContentView(root); updateScreen()
     }
-
     private fun updateScreen() {
-        if (!::content.isInitialized) return
-        val bots=NativeTradingEngine.snapshots()
-        val pnl=bots.sumOf { it.pnl }
-        val equity=1000.0+pnl
-        summary.text="P/L simulado: ${money(pnl)}   ·   Capital: ${money(equity)}"
+        if(!::content.isInitialized)return
+        val bots=NativeTradingEngine.snapshots(); val pnl=bots.sumOf{it.pnl}
+        summary.text="P/L SIMULADO  "+money(pnl)+"     ·     CAPITAL "+money(1000.0+pnl)
         content.removeAllViews()
         when(page) {
             "Inicio" -> {
-                panel("Resumen de cartera", "10 bots independientes · 100 USDT iniciales por bot · solo simulación")
-                content.addView(text("Resultado total: ${money(pnl)}",20f,if(pnl>=0) accent else Color.RED,true))
-                content.addView(text("Capital base: 1.000 USDT",14f,Color.WHITE,false))
-                content.addView(text("Ejecución: servicio Android en segundo plano",13f,muted,false))
-                content.addView(text("Estrategia: tendencia EMA, momentum, RSI contrarian en rango, ATR y aprendizaje online conservador.",13f,muted,false))
-                bots.forEach { botCard(it) }
+                panel("Ganancia/Pérdida Total","Capital total: "+money(1000.0+pnl))
+                content.addView(text((if(pnl>=0) "+" else "")+money(pnl)+"   "+String.format(Locale.US,"%+.2f%%",pnl/1000.0*100),24f,if(pnl>=0)green else Color.RED,true))
+                val best=bots.maxByOrNull{it.pnl}; cardBlock("Mejor rendimiento",(best?.symbol?: "—")+"    "+money(best?.pnl?:0.0))
+                val stats=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+                listOf(bots.size.toString()+"|Bots activos",bots.count{it.pnl>0}.toString()+"|Ganadores",bots.count{it.pnl<0}.toString()+"|Perdedores").forEachIndexed{i,s->
+                    val parts=s.split("|"); val c=if(i==1)green else if(i==2)Color.RED else Color.WHITE
+                    val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(5,9,5,9);setBackgroundColor(card);addView(text(parts[0],19f,c,true));addView(text(parts[1],10f,muted,false))}
+                    stats.addView(box,LinearLayout.LayoutParams(0,-2,1f).apply{setMargins(3,4,3,4)})
+                }; content.addView(stats); panel("Mercados","Toca una criptomoneda para abrir su ficha")
+                bots.take(5).forEach{marketRow(it)}; actionButton("Ver todos los mercados"){page="Mercados";render()}
             }
             "Mercados" -> {
-                panel("Mercados", "Toca un activo para abrir su ficha")
-                bots.forEach { b ->
-                    val row=button("${b.symbol}    ${if(b.price>0) String.format(Locale.US,"%,.4f",b.price) else "Cargando precio…"}    ${b.position}")
-                    row.setOnClickListener { selected=b.symbol; page="Detalle"; render() }
-                    content.addView(row)
-                }
+                panel("Mercados","Todo     Futuros     Top     DeFi     Memes")
+                val search=EditText(this).apply{hint="Buscar criptomoneda…";setHintTextColor(muted);setTextColor(Color.WHITE);textSize=14f;setSingleLine();setPadding(14,8,14,8);setBackgroundColor(card)}
+                content.addView(search); val list=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}; content.addView(list)
+                fun fill(q:String){list.removeAllViews();bots.filter{it.symbol.contains(q,true)}.forEach{marketRow(it,list)}}
+                fill(""); search.addTextChangedListener(object:android.text.TextWatcher{override fun beforeTextChanged(s:CharSequence?,st:Int,c:Int,a:Int){};override fun onTextChanged(s:CharSequence?,st:Int,b:Int,c:Int){fill(s.toString())};override fun afterTextChanged(s:android.text.Editable?){}})
             }
             "Detalle" -> {
-                val b=bots.firstOrNull { it.symbol==selected } ?: bots.first()
-                val back=button("‹  Volver a mercados"); back.setOnClickListener { page="Mercados"; render() }; content.addView(back)
-                panel(b.symbol, b.status)
-                content.addView(text("Precio: ${if(b.price>0) String.format(Locale.US,"%,.6f",b.price) else "sin datos"}",18f,Color.WHITE,true))
-                content.addView(text("Balance: ${money(b.balance)}  ·  P/L: ${money(b.pnl)}",15f,accent,true))
-                content.addView(text("Posición: ${b.position}  ·  Entrada: ${if(b.entry>0) String.format(Locale.US,"%.6f",b.entry) else "—"}",14f,Color.WHITE,false))
-                content.addView(text("Operaciones cerradas: ${b.trades}  ·  Aciertos: ${b.wins}  ·  Aprendizajes: ${b.learned}",13f,muted,false))
-                controls(b.symbol,b.risk,b.leverage)
+                val b=bots.firstOrNull{it.symbol==selected}?:bots.first()
+                content.addView(text("‹   "+b.symbol.replace("-","/")+"     ★   ⋯",18f,Color.WHITE,true))
+                content.addView(text(if(b.price>0)String.format(Locale.US,"%,.2f",b.price) else "Cargando precio…",27f,green,true))
+                content.addView(text("Precio de mercado · intervalo 1H",11f,muted,false)); chart()
+                panel("Posiciones",b.position+"  ·  "+b.status); cardBlock("Balance del bot",money(b.balance)+"    P/L "+money(b.pnl))
+                cardBlock("Operación actual","Entrada "+(if(b.entry>0)String.format(Locale.US,"%.5f",b.entry)else "—")+"    ·    "+b.trades+" cierres")
+                controls(b.symbol,b.risk,b.leverage); actionButton("Volver a mercados"){page="Mercados";render()}
             }
             "Operaciones" -> {
-                panel("Operaciones abiertas", "Posiciones simuladas, stop y objetivo calculados con ATR")
-                bots.filter { it.position!="FLAT" }.forEach { botCard(it) }
-                if(bots.none { it.position!="FLAT" }) content.addView(text("No hay posiciones abiertas.",14f,muted,false))
+                panel("Operaciones abiertas","Posiciones abiertas     ·     Historial")
+                val open=bots.filter{it.position!="FLAT"}; cardBlock("Vista general","P/L: "+money(pnl)+"\nBalance: "+money(bots.sumOf{it.balance})+"\nPosiciones abiertas: "+open.size)
+                if(open.isEmpty())content.addView(text("No hay posiciones abiertas ahora mismo.",14f,muted,false))
+                open.forEach{cardBlock(it.symbol.replace("-","/"),it.position+"    "+money(it.pnl)+"\nEntrada: "+(if(it.entry>0)String.format(Locale.US,"%.5f",it.entry)else "—")+"\n"+it.status)}
             }
             "Historial" -> {
-                panel("Historial y aprendizaje", "Los cierres, pesos del modelo y balances se guardan en el dispositivo.")
-                bots.forEach { content.addView(text("${it.symbol}: ${it.trades} cierres · ${it.learned} actualizaciones · balance ${money(it.balance)}",14f,Color.WHITE,false)) }
-                content.addView(text("Carpeta interna: ${NativeTradingEngine.storagePath()}",11f,muted,false))
-                content.addView(text("También se escribe copia y registro CSV en Android/data/com.joapetis.bitcoinfuturos/files/CryptoFutures cuando Android lo permite.",11f,muted,false))
-                content.addView(text(NativeTradingEngine.lastError(),12f,Color.YELLOW,false))
+                panel("Historial","Operaciones simuladas y aprendizaje")
+                bots.forEach{cardBlock(it.symbol,it.trades.toString()+" cierres · "+it.wins+" aciertos\nBalance "+money(it.balance)+" · P/L "+money(it.pnl)+" · Aprendizaje "+it.learned)}
+                content.addView(text("Datos guardados en: "+NativeTradingEngine.storagePath(),10f,muted,false)); content.addView(text(NativeTradingEngine.lastError(),12f,Color.YELLOW,false))
             }
             "Ajustes" -> {
-                panel("Ajustes", "Los cambios se guardan inmediatamente y no reinician el aprendizaje.")
-                val spinner=Spinner(this)
-                val opts=listOf("BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","DOGE-USDT","BNB-USDT","LINK-USDT","ADA-USDT","AVAX-USDT","SUI-USDT")
-                spinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,opts)
-                spinner.setSelection(opts.indexOf(selected).coerceAtLeast(0))
-                spinner.onItemSelectedListener=object: android.widget.AdapterView.OnItemSelectedListener {
-                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-                    override fun onItemSelected(parent: android.widget.AdapterView<*>?,view: View?,position:Int,id:Long) { selected=opts[position] }
-                }
-                content.addView(spinner)
-                val b=bots.firstOrNull { it.symbol==selected } ?: bots.first()
-                controls(b.symbol,b.risk,b.leverage)
-                content.addView(text("El simulador usa velas públicas de OKX, intervalo 1H. El procesamiento y aprendizaje se ejecutan en el teléfono; no se usan claves privadas ni se envían órdenes reales.",13f,muted,false))
-                content.addView(text("No se puede garantizar ejecución continua si Android fuerza la detención, se agota la batería o se pierde Internet. Desactiva la optimización de batería para la app si quieres mayor continuidad.",12f,muted,false))
+                panel("Ajustes","Configuración de la aplicación")
+                cardBlock("Simulación en segundo plano","Mantiene activos los bots mediante el servicio Android")
+                content.addView(text("Bot a configurar",13f,Color.WHITE,true))
+                val spinner=Spinner(this); spinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,symbols); spinner.setSelection(symbols.indexOf(selected).coerceAtLeast(0))
+                spinner.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onNothingSelected(p:AdapterView<*>?){};override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){selected=symbols[pos]}}
+                content.addView(spinner); val b=bots.firstOrNull{it.symbol==selected}?:bots.first(); controls(b.symbol,b.risk,b.leverage)
+                cardBlock("General","Modo oscuro · Español\nDatos públicos de mercado · Sin claves privadas\nSolo simulación: no se envían órdenes reales.")
+                cardBlock("Continuidad","Android puede limitar procesos en segundo plano. Revisa la optimización de batería para mejorar la continuidad.")
             }
         }
     }
-
-    private fun controls(symbol:String,risk:Double,leverage:Int) {
-        content.addView(text("Riesgo por operación",13f,Color.WHITE,true))
-        val riskBar=SeekBar(this).apply { max=100; progress=risk.toInt().coerceIn(1,100) }
-        val riskLabel=text("${risk.toInt()}% del balance como riesgo teórico",12f,muted,false)
-        content.addView(riskBar); content.addView(riskLabel)
-        riskBar.setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(s:SeekBar?,p:Int,u:Boolean) { riskLabel.text="${p.coerceAtLeast(1)}% del balance como riesgo teórico"; if(u) NativeTradingEngine.setRisk(symbol,p.coerceAtLeast(1).toDouble()) }
-            override fun onStartTrackingTouch(s:SeekBar?) {}
-            override fun onStopTrackingTouch(s:SeekBar?) {}
-        })
-        content.addView(text("Apalancamiento simulado",13f,Color.WHITE,true))
-        val levs=listOf(1,2,3,5,10,20,50,75,100)
-        val spinner=Spinner(this)
-        spinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,levs.map { "x$it" })
-        spinner.setSelection(levs.indexOf(leverage).coerceAtLeast(0))
-        spinner.onItemSelectedListener=object: android.widget.AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?,view:View?,position:Int,id:Long) { NativeTradingEngine.setLeverage(symbol,levs[position]) }
-        }
-        content.addView(spinner)
+    private fun marketRow(b:BotSnapshot,parent:LinearLayout=content){
+        val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(8,10,8,10);setBackgroundColor(bg);setOnClickListener{selected=b.symbol;page="Detalle";render()}}
+        row.addView(text(when(b.symbol){"BTC-USDT"->"₿";"ETH-USDT"->"◆";"SOL-USDT"->"≋";"XRP-USDT"->"✕";"DOGE-USDT"->"Ð";else->"●"},24f,when(b.symbol){"BTC-USDT"->Color.rgb(255,159,28);"ETH-USDT"->Color.rgb(99,126,234);"SOL-USDT"->Color.MAGENTA;else->blue},true))
+        val names=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(10,0,0,0)}
+        names.addView(text(b.symbol.substringBefore("-"),14f,Color.WHITE,true)); names.addView(text(when(b.symbol){"BTC-USDT"->"Bitcoin";"ETH-USDT"->"Ethereum";"SOL-USDT"->"Solana";"DOGE-USDT"->"Dogecoin";else->b.symbol.substringBefore("-")},10f,muted,false))
+        row.addView(names,LinearLayout.LayoutParams(0,-2,1f)); row.addView(text(if(b.price>0)String.format(Locale.US,"%,.4f",b.price)else "—",12f,Color.WHITE,false))
+        row.addView(text(String.format(Locale.US,"%+.2f%%",b.pnl),11f,if(b.pnl>=0)green else Color.RED,true)); parent.addView(row)
+        parent.addView(View(this).apply{setBackgroundColor(Color.rgb(25,39,53))},LinearLayout.LayoutParams(-1,1))
     }
-
-    private fun botCard(b:BotSnapshot) {
-        val box=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(14,12,14,12); setBackgroundColor(card) }
-        val lp=LinearLayout.LayoutParams(-1,-2); lp.setMargins(0,6,0,6)
-        box.addView(text("${b.symbol}     ${b.position}",16f,Color.WHITE,true))
-        box.addView(text(if(b.price>0) String.format(Locale.US,"Precio  %, .6f",b.price).replace(" ","") else "Precio esperando conexión",13f,muted,false))
-        box.addView(text("Balance ${money(b.balance)}    P/L ${money(b.pnl)}",14f,if(b.pnl>=0) accent else Color.RED,true))
-        box.addView(text("${b.status}  ·  ${b.trades} cierres  ·  IA: ${b.learned}",11f,muted,false))
-        box.setOnClickListener { selected=b.symbol; page="Detalle"; render() }
-        content.addView(box,lp)
+    private fun controls(symbol:String,risk:Double,leverage:Int){
+        cardBlock("Riesgo por operación",risk.toInt().toString()+"% del balance como riesgo teórico")
+        val bar=SeekBar(this).apply{max=20;progress=risk.toInt().coerceIn(1,20)}; content.addView(bar)
+        bar.setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{override fun onProgressChanged(s:SeekBar?,p:Int,u:Boolean){if(u)NativeTradingEngine.setRisk(symbol,p.coerceAtLeast(1).toDouble())};override fun onStartTrackingTouch(s:SeekBar?){};override fun onStopTrackingTouch(s:SeekBar?){}})
+        content.addView(text("Apalancamiento simulado",13f,Color.WHITE,true)); val levs=listOf(1,2,3,5,10,20,50,75,100); val sp=Spinner(this)
+        sp.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,levs.map{"x"+it});sp.setSelection(levs.indexOf(leverage).coerceAtLeast(0))
+        sp.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onNothingSelected(p:AdapterView<*>?){};override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){NativeTradingEngine.setLeverage(symbol,levs[pos])}}
+        content.addView(sp)
     }
-    private fun panel(title:String,subtitle:String) {
-        content.addView(text(title,20f,Color.WHITE,true))
-        content.addView(text(subtitle,12f,muted,false))
-        val spacer=View(this); content.addView(spacer,LinearLayout.LayoutParams(1,8))
+    private fun chart(){
+        val v=object:View(this){val p=Paint(Paint.ANTI_ALIAS_FLAG);override fun onDraw(c:Canvas){val w=width.toFloat();val h=height.toFloat();p.color=Color.rgb(23,38,55);p.strokeWidth=1f
+            for(i in 0..4)c.drawLine(0f,h*i/4,w,h*i/4,p);for(i in 0..5)c.drawLine(w*i/5,0f,w*i/5,h,p)
+            p.color=Color.rgb(28,96,190);p.style=Paint.Style.STROKE;p.strokeWidth=2f;val path=Path()
+            for(i in 0..100){val x=w*i/100;val y=h*(0.5f+0.23f*sin(i*0.17).toFloat()+0.09f*sin(i*0.49).toFloat());if(i==0)path.moveTo(x,y)else path.lineTo(x,y)};c.drawPath(path,p);p.style=Paint.Style.FILL
+            p.color=green;for(i in 0..27){val x=w*i/27;val y=h*(0.72f-0.48f*i/27+0.08f*sin(i*1.4).toFloat());c.drawLine(x,y-7,x,y+8,p);c.drawRect(x-2,y-5,x+2,y+5,p)}
+        }};v.layoutParams=LinearLayout.LayoutParams(-1,210);content.addView(v);content.addView(text("1H       4H       1D                         RSI / ATR",11f,muted,false))
     }
-    private fun text(value:String,size:Float,color:Int,bold:Boolean):TextView = TextView(this).apply {
-        text=value; textSize=size; setTextColor(color); if(bold) setTypeface(typeface,Typeface.BOLD); setPadding(0,5,0,5)
-    }
-    private fun button(value:String):Button = Button(this).apply { text=value; textSize=13f; isAllCaps=false; setTextColor(Color.WHITE); setBackgroundColor(card) }
-    override fun onDestroy() { handler.removeCallbacks(refreshRunnable); super.onDestroy() }
+    private fun cardBlock(title:String,body:String){val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(14,10,14,10);setBackgroundColor(card);addView(text(title,14f,Color.WHITE,true));addView(text(body,12f,muted,false))};content.addView(box,LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,5,0,5)})}
+    private fun panel(title:String,subtitle:String){content.addView(text(title,21f,Color.WHITE,true));content.addView(text(subtitle,11f,muted,false));content.addView(View(this),LinearLayout.LayoutParams(1,7))}
+    private fun actionButton(label:String,action:()->Unit){content.addView(Button(this).apply{text=label;isAllCaps=false;textSize=13f;setTextColor(Color.WHITE);setBackgroundColor(blue);setOnClickListener{action()}},LinearLayout.LayoutParams(-1,-2))}
+    private fun text(value:String,size:Float,color:Int,bold:Boolean)=TextView(this).apply{text=value;textSize=size;setTextColor(color);if(bold)setTypeface(typeface,Typeface.BOLD);setPadding(0,4,0,4)}
+    override fun onDestroy(){handler.removeCallbacks(refreshRunnable);super.onDestroy()}
 }
