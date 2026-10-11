@@ -90,6 +90,10 @@ object NativeTradingEngine {
         }
     }
     fun candles(symbol: String): List<CandleSnapshot> = synchronized(lock) { candleCache[symbol]?.toList() ?: emptyList() }
+    fun marketChange24h(symbol: String): Double = synchronized(lock) {
+        val c = candleCache[symbol] ?: return@synchronized 0.0
+        if (c.size < 25 || c[c.size-25].close == 0.0) 0.0 else (c.last().close / c[c.size-25].close - 1.0) * 100.0
+    }
     fun totalPnl() = snapshots().sumOf { it.pnl }
     fun lastError(): String = synchronized(lock) { lastError }
     fun storagePath(): String = synchronized(lock) { File(app.filesDir, "CryptoFutures").absolutePath }
