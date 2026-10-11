@@ -283,11 +283,45 @@ const STORE_KEY=FIXED_SYMBOL==='BTCUSDT'?'btcbot.v1':`btcbot.v1.${FIXED_SYMBOL}`
 const DEF={tf:'1h',symbol:FIXED_SYMBOL,lev:100,sound:true,notice:0,thr:31,risk:5,ver:7,slMult:1.5,ov:{ema:true,vwap:true,bb:false}};
 let S=JSON.parse(JSON.stringify(DEF));
 let B={balance:START,trades:[],pos:null};
-try{const raw=localStorage.getItem(STORE_KEY);if(raw){const o=JSON.parse(raw);const oldVer=Number((o.S||{}).ver)||0;S=Object.assign(S,o.S||{});S.ov=Object.assign({},DEF.ov,(o.S||{}).ov||{});B=Object.assign(B,o.B||{});if(oldVer<4){S.thr=31;S.risk=0.5;S.notice=10;S.ver=4;B={balance:START,trades:[],pos:null};}if(oldVer<6){S.tf='1h';S.risk=5;S.lev=100;S.ver=6;}if(oldVer<7){S.notice=0;S.ver=7;}}}catch(e){}
+let NN={w1:null,b1:null,w2:null,b2:0,seen:0};
+try{const raw=localStorage.getItem(STORE_KEY);if(raw){const o=JSON.parse(raw);const oldVer=Number((o.S||{}).ver)||0;S=Object.assign(S,o.S||{});S.ov=Object.assign({},DEF.ov,(o.S||{}).ov||{});B=Object.assign(B,o.B||{});NN=Object.assign(NN,o.NN||{});if(oldVer<4){S.thr=31;S.risk=0.5;S.notice=10;S.ver=4;B={balance:START,trades:[],pos:null};}if(oldVer<6){S.tf='1h';S.risk=5;S.lev=100;S.ver=6;}if(oldVer<7){S.notice=0;S.ver=7;}}}catch(e){}
 if(!TFS[S.tf])S.tf='1h';S.symbol=FIXED_SYMBOL;S.lev=clamp(+S.lev||100,1,100);
 S.notice=0;S.thr=clamp(Number(S.thr)||31,10,80);S.risk=clamp(Number(S.risk)||5,0.25,100);S.slMult=clamp(Number(S.slMult)||1.5,0.5,5);
 if(!Number.isFinite(B.balance)||B.balance<0)B.balance=START;if(!Array.isArray(B.trades))B.trades=[];if(!('pos' in B))B.pos=null;
-const save=()=>{try{localStorage.setItem(STORE_KEY,JSON.stringify({S,B}));}catch(e){}};
+const save=()=>{try{localStorage.setItem(STORE_KEY,JSON.stringify({S,B,NN}));}catch(e){}};
+function nnInit(){
+  if(Array.isArray(NN.w1)&&NN.w1.length===5&&NN.w1.every(r=>Array.isArray(r)&&r.length===7)&&Array.isArray(NN.w2)&&NN.w2.length===5)return;
+  // Red neuronal compacta 7-5-1, inicialización determinista por activo.
+  let seed=FIXED_SYMBOL.split('').reduce((s,ch)=>((s*31+ch.charCodeAt(0))>>>0),173);
+  const rnd=()=>{seed=(seed*1664525+1013904223)>>>0;return (seed/4294967296-0.5)*0.5;};
+  NN={w1:Array.from({length:5},()=>Array.from({length:7},rnd)),b1:Array.from({length:5},rnd),w2:Array.from({length:5},rnd),b2:rnd(),seen:0};
+}
+const sigmoid=x=>1/(1+Math.exp(-clamp(x,-12,12)));
+function nnFeatures(a){
+  const I=ind||{},i=candles.length-1,px=a.px||1;
+  const e50=I.ema50?.[i],e200=I.ema200?.[i];
+  const trend=e50!=null&&e200!=null?Math.sign(e50-e200):0;
+  return [clamp(a.score/100,-1,1),clamp(a.consensus||0,0,1),clamp((a.confidence-50)/45,-1,1),
+    clamp(((a.rsi||50)-50)/50,-1,1),trend,
+    clamp((a.closeQuality??0.5)*2-1,-1,1),clamp(Math.log(Math.max(0.1,a.volumeRatio||1))/2,-1,1)];
+}
+function nnForward(x){
+  nnInit();
+  const h=NN.w1.map((row,j)=>Math.tanh(row.reduce((s,w,k)=>s+w*x[k],NN.b1[j])));
+  const z=NN.b2+NN.w2.reduce((s,w,j)=>s+w*h[j],0);
+  return {p:sigmoid(z),h,x};
+}
+function nnTrain(sample,label){
+  if(!sample||!Array.isArray(sample.x)||sample.x.length!==7)return;
+  const f=nnForward(sample.x),err=clamp(label-f.p,-1,1),lr=0.025/Math.sqrt(1+NN.seen*0.08);
+  for(let j=0;j<NN.w2.length;j++){
+    const grad=err*f.h[j];NN.w2[j]=clamp(NN.w2[j]+lr*grad,-3,3);
+    const dh=err*NN.w2[j]*(1-f.h[j]*f.h[j]);
+    for(let k=0;k<7;k++)NN.w1[j][k]=clamp(NN.w1[j][k]+lr*dh*f.x[k],-3,3);
+    NN.b1[j]=clamp(NN.b1[j]+lr*dh,-3,3);
+  }
+  NN.b2=clamp(NN.b2+lr*err,-3,3);NN.seen++;save();
+}
 
 let candles=[], ind=null, lastA=null, dirty=false, funding=null, lastMsg=0, source='', ws=null, conn=0;
 let lastTradePrice=null, lastTradeAt=0, reconnectTimer=null, reconnectDelay=1500, lastWsMessageAt=0, sourceOffset=0;
@@ -622,7 +656,7 @@ function stepBot(a,now){
 function openPos(side,a,now){
   const entry=a.px*(1+side*SLIP),pl=plan(side,a,entry),sz=sizing(pl);
   if(!Number.isFinite(sz.qty)||sz.qty<=0||!Number.isFinite(sz.risk)||sz.risk<=0){alertUser('warn','Operación bloqueada','El tamaño calculado es cero o inválido. No se abre la operación.');cooldownUntil=now+30000;return;}
-  B.pos={side,entry,qty:sz.qty,qty0:sz.qty,sl:pl.sl,tp1:pl.tp1,tp2:pl.tp2,tp1Hit:false,t:now,risk:sz.risk,best:entry,realized:-sz.qty*entry*FEE,lastSlAlert:now};
+  B.pos={side,entry,qty:sz.qty,qty0:sz.qty,sl:pl.sl,tp1:pl.tp1,tp2:pl.tp2,tp1Hit:false,t:now,risk:sz.risk,best:entry,realized:-sz.qty*entry*FEE,lastSlAlert:now,nnSample:{x:nnFeatures(a),side}};
   alertUser(side>0?'long':'short',`${sideWord(side)} ejecutada (simulada)`,`Entrada ${fmt(entry,1)}. Stop loss ${fmt(pl.sl,1)}, objetivo 1 ${fmt(pl.tp1,1)}, objetivo 2 ${fmt(pl.tp2,1)}. Tamaño ${fmt(sz.qty,4)} ${SYMBOLS[S.symbol].base}.`,{say:`${side>0?'Compra':'Venta'} ejecutada. Stop loss en ${Math.round(pl.sl)}`,ttl:12000});
   save();
 }
@@ -630,7 +664,7 @@ function simulatedExitPrice(side,px){return px*(1-side*SLIP);}
 function realize(px,q){const P=B.pos,fill=simulatedExitPrice(P.side,px);P.realized+=P.side*(fill-P.entry)*q-fill*q*FEE;P.qty-=q;return fill;}
 function closePos(px,reason,now){
   const P=B.pos;if(!P)return;const fill=realize(px,P.qty);B.balance+=P.realized;
-  B.trades.push({side:P.side,entry:P.entry,exit:fill,qty:P.qty0,pnl:P.realized,r:P.realized/Math.max(P.risk,1e-9),reason,tOpen:P.t,tClose:now});
+  B.trades.push({side:P.side,entry:P.entry,exit:fill,qty:P.qty0,pnl:P.realized,r:P.realized/Math.max(P.risk,1e-9),reason,tOpen:P.t,tClose:now});\n  nnTrain(P.nnSample,P.realized>0?1:0);
   if(B.trades.length>300)B.trades.shift();
   alertUser(P.realized>=0?'win':'loss',`Cierre: ${reason}`,`${P.side>0?'Compra':'Venta'} cerrada a ${fmt(fill,1)} (incluye deslizamiento simulado). Resultado ${sgnStr(P.realized)} USDT (${sgnStr(P.realized/Math.max(P.risk,1e-9),1)} R).`,{say:'Operación cerrada'});
   B.pos=null;pend=null;histVer++;
