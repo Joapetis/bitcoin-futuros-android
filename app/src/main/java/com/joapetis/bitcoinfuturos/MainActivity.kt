@@ -149,10 +149,10 @@ class MainActivity : Activity() {
         parent.addView(View(this).apply{setBackgroundColor(Color.rgb(25,39,53))},LinearLayout.LayoutParams(-1,1))
     }
     private fun sparkline(symbol:String):View{
-        val data=NativeTradingEngine.candles(symbol).takeLast(24)
         return object:View(this){
             private val p=Paint(Paint.ANTI_ALIAS_FLAG)
             override fun onDraw(c:Canvas){
+                val data=NativeTradingEngine.candles(symbol).takeLast(24)
                 if(data.size<2)return
                 val lo=data.minOf{it.close};val hi=data.maxOf{it.close};val span=(hi-lo).takeIf{it>0}?:1.0
                 p.color=if(data.last().close>=data.first().close)green else Color.rgb(255,77,90)
@@ -177,10 +177,10 @@ class MainActivity : Activity() {
         content.addView(sp)
     }
     private fun chart(){
-        val candles=NativeTradingEngine.candles(selected).takeLast(55)
         val v=object:View(this){
             val p=Paint(Paint.ANTI_ALIAS_FLAG)
             override fun onDraw(c:Canvas){
+                val candles=NativeTradingEngine.candles(selected).takeLast(55)
                 val w=width.toFloat(); val h=height.toFloat()
                 if(w<=0f||h<=0f)return
                 p.style=Paint.Style.FILL
