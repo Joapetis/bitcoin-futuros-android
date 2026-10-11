@@ -318,6 +318,35 @@ object NativeTradingEngine {
         } catch (e: Exception) { "No se pudo acceder a la carpeta: " + (e.message ?: "permiso denegado") }
     }
     fun backupFolderLabel(): String = if (backupTreeUri == null) "No seleccionada" else "Configurada · respaldo automático"
+
+    fun restoreUserBackup(): String = synchronized(lock) {
+        val tree = backupTreeUri ?: return@synchronized "Selecciona primero la carpeta que contiene el respaldo."
+        try {
+            val resolver = app.contentResolver
+            fun find(parentId: String, name: String): String? {
+                val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId)
+                resolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
+                    while (c.moveToNext()) if (c.getString(1) == name) return c.getString(0)
+                }
+                return null
+            }
+            val cf = find(DocumentsContract.getTreeDocumentId(tree), "CryptoFutures") ?: return@synchronized "No encuentro CryptoFutures."
+            val backups = find(cf, "backups") ?: return@synchronized "No encuentro la carpeta backups."
+            val file = find(backups, "state-v1.json") ?: return@synchronized "No hay archivo state-v1.json."
+            val uri = DocumentsContract.buildDocumentUriUsingTree(tree, file)
+            val raw = resolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: return@synchronized "No se pudo leer el archivo."
+            val arr = JSONObject(raw).optJSONArray("bots") ?: return@synchronized "El respaldo no es válido."
+            var count = 0
+            for (i in 0 until arr.length()) {
+                val b = arr.optJSONObject(i) ?: continue
+                val symbol = b.optString("symbol")
+                if (symbol in symbols) { bots[symbol] = b; count++ }
+            }
+            if (count == 0) return@synchronized "No se encontraron bots compatibles."
+            saveLocked()
+            "Restauración completada: $count bots recuperados."
+        } catch (e: Exception) { "No se pudo restaurar: " + (e.message ?: "error de lectura") }
+    }
     private fun saveUserBackup(root: JSONObject) {
         val tree = backupTreeUri ?: return
         try {
