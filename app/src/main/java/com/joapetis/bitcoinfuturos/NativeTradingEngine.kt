@@ -304,11 +304,17 @@ object NativeTradingEngine {
                 else -> null
             }
         }
-        val livePrice = streamPrice ?: fetchLivePrice(symbol)
+        val streamUnavailable = synchronized(lock) {
+            System.currentTimeMillis() - bybitConnectedAt >= 15_000L &&
+                System.currentTimeMillis() - binanceConnectedAt >= 15_000L
+        }
+        // Avoid serial REST calls while either public futures stream is healthy.
+        val livePrice = streamPrice ?: if (streamUnavailable) fetchLivePrice(symbol) else null
         if (livePrice != null && livePrice > 0.0) {
             synchronized(lock) {
                 val b = bots[symbol]
-                if (streamPrice != null || b?.optDouble("price", 0.0) == 0.0) b?.put("price", livePrice)
+                if (streamPrice != null || streamUnavailable || b?.optDouble("price", 0.0) == 0.0)
+                    b?.put("price", livePrice)
             }
         }
         val chosenBar = synchronized(lock) { bots[symbol]?.optString("botBar", "1H") ?: "1H" }
