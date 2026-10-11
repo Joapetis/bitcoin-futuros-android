@@ -6,8 +6,8 @@
     <application
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:label="Crypto Futures Alpha 0.1"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher"
+        android:icon="@drawable/ic_crypto_futures"
+        android:roundIcon="@drawable/ic_crypto_futures"
         android:usesCleartextTraffic="false">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
