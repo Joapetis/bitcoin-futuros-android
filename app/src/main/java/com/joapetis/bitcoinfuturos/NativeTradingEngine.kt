@@ -25,7 +25,8 @@ data class CandleSnapshot(val time: Long, val open: Double, val high: Double, va
 data class BotSnapshot(
     val symbol: String, val balance: Double, val price: Double, val pnl: Double,
     val position: String, val entry: Double, val trades: Int, val wins: Int,
-    val status: String, val leverage: Int, val risk: Double, val learned: Int
+    val status: String, val leverage: Int, val risk: Double, val learned: Int,
+    val equity: Double = balance
 )
 
 object NativeTradingEngine {
@@ -118,9 +119,11 @@ object NativeTradingEngine {
             val side = b.optString("side", "FLAT")
             val floating = if (entry > 0 && p > 0 && side != "FLAT")
                 (if (side == "LONG") p-entry else entry-p) * b.optDouble("qty", 0.0) else 0.0
-            BotSnapshot(s, b.optDouble("balance",100.0), p, b.optDouble("balance",100.0)-b.optDouble("initial",100.0)-b.optDouble("injectedCapital",0.0)+floating,
+            val balance = b.optDouble("balance",100.0)
+            BotSnapshot(s, balance, p, balance-b.optDouble("initial",100.0)-b.optDouble("injectedCapital",0.0)+floating,
                 side, entry, b.optInt("trades"), b.optInt("wins"), b.optString("lastSignal"),
-                b.optInt("leverage",100), b.optDouble("risk",5.0), b.optInt("learned"))
+                b.optInt("leverage",100), b.optDouble("risk",5.0), b.optInt("learned"),
+                balance + floating)
         }
     }
     fun candles(symbol: String): List<CandleSnapshot> = synchronized(lock) { candleCache[symbol]?.toList() ?: emptyList() }
