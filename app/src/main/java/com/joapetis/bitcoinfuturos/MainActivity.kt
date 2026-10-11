@@ -77,16 +77,19 @@ class MainActivity : Activity() {
         content.removeAllViews()
         when(page) {
             "Inicio" -> {
-                panel("Ganancia/Pérdida Total","Capital total: "+money(1000.0+pnl))
-                content.addView(text((if(pnl>=0) "+" else "")+money(pnl)+"   "+String.format(Locale.US,"%+.2f%%",pnl/1000.0*100),24f,if(pnl>=0)green else Color.RED,true))
-                val best=bots.maxByOrNull{it.pnl}; cardBlock("Mejor rendimiento",(best?.symbol?: "—")+"    "+money(best?.pnl?:0.0))
+                overviewCard(pnl, 1000.0 + pnl)
+                val best=bots.maxByOrNull{it.pnl}
+                bestCard(best?.symbol ?: "BTC-USDT", best?.pnl ?: 0.0)
                 val stats=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
-                listOf(bots.size.toString()+"|Bots activos",bots.count{it.pnl>0}.toString()+"|Ganadores",bots.count{it.pnl<0}.toString()+"|Perdedores").forEachIndexed{i,s->
-                    val parts=s.split("|"); val c=if(i==1)green else if(i==2)Color.RED else Color.WHITE
-                    val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(dp(5),dp(9),dp(5),dp(9));setBackgroundColor(card);addView(text(parts[0],19f,c,true));addView(text(parts[1],10f,muted,false))}
-                    stats.addView(box,LinearLayout.LayoutParams(0,-2,1f).apply{setMargins(dp(3),dp(4),dp(3),dp(4))})
-                }; content.addView(stats); panel("Mercados","Toca una criptomoneda para abrir su ficha")
-                bots.take(5).forEach{marketRow(it)}; actionButton("Ver todos los mercados"){page="Mercados";render()}
+                listOf(bots.size.toString()+"|Bots activos",bots.count{it.pnl>0}.toString()+"|Ganadores",bots.count{it.pnl<0}.toString()+"|Perdedores").forEachIndexed{i,s0->
+                    val parts=s0.split("|"); val c=if(i==1)green else if(i==2)Color.rgb(255,64,75) else Color.WHITE
+                    val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(10),dp(10),dp(6),dp(10));setBackgroundColor(card);addView(text(parts[0],20f,c,true));addView(text(parts[1],10f,muted,false))}
+                    stats.addView(box,LinearLayout.LayoutParams(0,-2,1f).apply{setMargins(dp(2),dp(4),dp(2),dp(4))})
+                }
+                content.addView(stats)
+                panel("Mercados","Toca una criptomoneda para abrir su ficha")
+                bots.take(5).forEach{marketRow(it)}
+                actionButton("Ver todos los mercados"){page="Mercados";render()}
             }
             "Mercados" -> {
                 panel("Mercados","Todo     Futuros     Top     DeFi     Memes")
@@ -150,12 +153,77 @@ class MainActivity : Activity() {
         content.addView(sp)
     }
     private fun chart(){
-        val v=object:View(this){val p=Paint(Paint.ANTI_ALIAS_FLAG);override fun onDraw(c:Canvas){val w=width.toFloat();val h=height.toFloat();p.color=Color.rgb(23,38,55);p.strokeWidth=1f
-            for(i in 0..4)c.drawLine(0f,h*i/4,w,h*i/4,p);for(i in 0..5)c.drawLine(w*i/5,0f,w*i/5,h,p)
-            p.color=Color.rgb(28,96,190);p.style=Paint.Style.STROKE;p.strokeWidth=2f;val path=Path()
-            for(i in 0..100){val x=w*i/100;val y=h*(0.5f+0.23f*sin(i*0.17).toFloat()+0.09f*sin(i*0.49).toFloat());if(i==0)path.moveTo(x,y)else path.lineTo(x,y)};c.drawPath(path,p);p.style=Paint.Style.FILL
-            p.color=green;for(i in 0..27){val x=w*i/27;val y=h*(0.72f-0.48f*i/27+0.08f*sin(i*1.4).toFloat());c.drawLine(x,y-7,x,y+8,p);c.drawRect(x-2,y-5,x+2,y+5,p)}
-        }};v.layoutParams=LinearLayout.LayoutParams(-1,dp(210));content.addView(v);content.addView(text("1H       4H       1D                         RSI / ATR",11f,muted,false))
+        val candles=NativeTradingEngine.candles(selected).takeLast(55)
+        val v=object:View(this){
+            val p=Paint(Paint.ANTI_ALIAS_FLAG)
+            override fun onDraw(c:Canvas){
+                val w=width.toFloat(); val h=height.toFloat()
+                if(w<=0f||h<=0f)return
+                p.style=Paint.Style.FILL
+                p.color=Color.rgb(7,14,23); c.drawRect(0f,0f,w,h,p)
+                p.color=Color.rgb(25,39,53);p.strokeWidth=dp(1).toFloat()
+                for(i in 0..4)c.drawLine(0f,h*i/4,w,h*i/4,p)
+                for(i in 0..5)c.drawLine(w*i/5,0f,w*i/5,h,p)
+                if(candles.size<2){
+                    p.color=muted;p.textSize=dp(12).toFloat()
+                    c.drawText("Esperando datos reales de velas…",dp(12).toFloat(),h/2,p);return
+                }
+                val minP=candles.minOf{it.low}; val maxP=candles.maxOf{it.high}
+                val range=(maxP-minP).takeIf{it>0}?:1.0
+                val plotBottom=h*0.78f; val volumeTop=h*0.82f; val volumeBottom=h*0.97f
+                val maxVol=candles.maxOf{it.volume}.takeIf{it>0}?:1.0
+                val slot=w/candles.size; val bodyW=(slot*0.58f).coerceAtLeast(dp(2).toFloat())
+                candles.forEachIndexed{i,k->
+                    val x=slot*(i+0.5f)
+                    val yHigh=plotBottom-((k.high-minP)/range).toFloat()*plotBottom
+                    val yLow=plotBottom-((k.low-minP)/range).toFloat()*plotBottom
+                    val yOpen=plotBottom-((k.open-minP)/range).toFloat()*plotBottom
+                    val yClose=plotBottom-((k.close-minP)/range).toFloat()*plotBottom
+                    val up=k.close>=k.open
+                    p.color=if(up)green else Color.rgb(255,77,90);p.strokeWidth=dp(1).toFloat()
+                    c.drawLine(x,yHigh,x,yLow,p)
+                    c.drawRect(x-bodyW/2,minOf(yOpen,yClose),x+bodyW/2,maxOf(yOpen,yClose).coerceAtLeast(minOf(yOpen,yClose)+dp(1)),p)
+                    val vh=((k.volume/maxVol)*(volumeBottom-volumeTop)).toFloat()
+                    c.drawRect(x-bodyW/2,volumeBottom-vh,x+bodyW/2,volumeBottom,p)
+                }
+                p.color=Color.rgb(30,132,255);p.style=Paint.Style.STROKE;p.strokeWidth=dp(1).toFloat()
+                val emaPath=Path()
+                candles.forEachIndexed{i,k->
+                    val x=slot*(i+0.5f);val y=plotBottom-((k.close-minP)/range).toFloat()*plotBottom
+                    if(i==0)emaPath.moveTo(x,y) else emaPath.lineTo(x,y)
+                }
+                c.drawPath(emaPath,p);p.style=Paint.Style.FILL
+                p.color=muted;p.textSize=dp(9).toFloat()
+                c.drawText(String.format(Locale.US,"%.4f",maxP),dp(3).toFloat(),dp(12).toFloat(),p)
+                c.drawText(String.format(Locale.US,"%.4f",minP),dp(3).toFloat(),plotBottom-dp(3).toFloat(),p)
+            }
+        }
+        v.layoutParams=LinearLayout.LayoutParams(-1,dp(260))
+        content.addView(v)
+        content.addView(text("● Alcista     ● Bajista                 VOLUMEN · VELAS 1H",10f,muted,false))
+    }
+    private fun overviewCard(pnl:Double,capital:Double){
+        val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(12),dp(14),dp(12));setBackgroundColor(card)}
+        val titleRow=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+        titleRow.addView(text("Ganancia/Pérdida Total",15f,Color.WHITE,true),LinearLayout.LayoutParams(0,-2,1f))
+        titleRow.addView(text("×",14f,muted,false))
+        box.addView(titleRow)
+        box.addView(text("Capital total: "+money(capital),11f,muted,false))
+        val profit=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+        profit.addView(text((if(pnl>=0) "+" else "")+money(pnl),26f,if(pnl>=0)green else Color.rgb(255,64,75),true))
+        profit.addView(Space(this),LinearLayout.LayoutParams(dp(8),dp(1)))
+        profit.addView(text(String.format(Locale.US,"%+.2f%%",pnl/1000.0*100),12f,if(pnl>=0)green else Color.rgb(255,64,75),true))
+        box.addView(profit)
+        content.addView(box,LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,dp(4),0,dp(8))})
+    }
+    private fun bestCard(symbol:String,pnl:Double){
+        val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(10));setBackgroundColor(card)}
+        box.addView(text("Mejor rendimiento",13f,Color.WHITE,true))
+        val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+        row.addView(text(when(symbol){"BTC-USDT"->"₿";"ETH-USDT"->"◆";"SOL-USDT"->"≋";"XRP-USDT"->"✕";"DOGE-USDT"->"Ð";else->"●"},22f,blue,true))
+        val name=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(10),0,0,0);addView(text(symbol.substringBefore("-"),13f,Color.WHITE,true));addView(text(String.format(Locale.US,"%+.2f USDT / %+.2f%%",pnl,pnl),11f,if(pnl>=0)green else Color.RED,true))}
+        row.addView(name,LinearLayout.LayoutParams(0,-2,1f));row.addView(text("›",22f,muted,false))
+        box.addView(row);content.addView(box,LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,dp(4),0,dp(6))})
     }
     private fun cardBlock(title:String,body:String){val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(10),dp(14),dp(10));setBackgroundColor(card);addView(text(title,14f,Color.WHITE,true));addView(text(body,12f,muted,false))};content.addView(box,LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,dp(5),0,dp(5))})}
     private fun panel(title:String,subtitle:String){content.addView(text(title,21f,Color.WHITE,true));content.addView(text(subtitle,11f,muted,false));content.addView(View(this),LinearLayout.LayoutParams(1,dp(7)))}
