@@ -127,7 +127,6 @@ class MainActivity : Activity() {
                         if(chartBar!=next){chartBar=next;liveChart?.invalidate();NativeTradingEngine.requestChartCandles(selected,chartBar){handler.post{liveChart?.invalidate()}}}
                     }
                 }
-                }
                 intervalRow.addView(intervalSpinner,LinearLayout.LayoutParams(dp(112),dp(42)))
                 content.addView(intervalRow)
                 liveChart=null
@@ -155,7 +154,7 @@ class MainActivity : Activity() {
                 val spinner=Spinner(this); spinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,symbols); spinner.setSelection(symbols.indexOf(selected).coerceAtLeast(0))
                 spinner.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onNothingSelected(p:AdapterView<*>?){};override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){selected=symbols[pos]}}
                 content.addView(spinner); val b=bots.firstOrNull{it.symbol==selected}?:bots.first(); controls(b.symbol,b.risk,b.leverage)
-                cardBlock("Costes simulados · mercado de futuros","Modelo conservador de simulación: comisión taker supuesta 0,05% por lado, deslizamiento supuesto 0,02% por lado y financiación estimada 0,01% cada 8 h. Son hipótesis de simulación, no tarifas oficiales ni comisiones verificadas de OKX/Bybit. Las tarifas reales dependen del mercado, nivel y cuenta; no se consulta ninguna cuenta privada.")
+                cardBlock("Comisiones Binance USDⓈ-M Futures · usuario estándar","Modelo de simulación VIP 0: taker 0,05% por lado en órdenes de mercado y maker 0,02% por lado en órdenes límite que aportan liquidez. El bot simula entradas y salidas como taker. Deslizamiento supuesto aparte: 0,02% por lado; financiación estimada: 0,01% cada 8 h, variable según contrato y momento. Binance puede aplicar descuentos/promociones y las tarifas pueden cambiar; estas son las tasas estándar de referencia, no una consulta de tu cuenta.")
                 cardBlock("IA neuronal local adaptativa","Red neuronal compacta multicapa 3-8-1 (3 entradas, 8 neuronas ocultas y salida de probabilidad), ejecutada en el Pixel sin inferencia en la nube. Cada bot guarda sus pesos y aprende al cerrar operaciones netas. Tras 20 cierres puede filtrar señales débiles. Es un modelo pequeño experimental, no una IA avanzada validada; no garantiza rentabilidad.")
                 cardBlock("General","Modo oscuro · Español\nDatos públicos de mercado · Sin claves privadas\nSolo simulación: no se envían órdenes reales. La viabilidad debe comprobarse con backtesting temporal y paper trading.")
                 cardBlock("Continuidad","Android puede limitar procesos en segundo plano. Revisa la optimización de batería para mejorar la continuidad.")
