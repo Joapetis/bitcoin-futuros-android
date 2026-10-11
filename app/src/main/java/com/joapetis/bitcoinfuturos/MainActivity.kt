@@ -55,7 +55,7 @@ class MainActivity : Activity() {
                 putExtra(BotKeepAliveService.EXTRA_BEST, best.take(80))
                 putExtra(BotKeepAliveService.EXTRA_STATUS, status.take(48))
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startService(intent) else startService(intent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
         }
     }
 
