@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     private val handler=Handler(Looper.getMainLooper())
     private lateinit var root:LinearLayout; private lateinit var content:LinearLayout; private lateinit var summary:TextView
     private var detailPrice:TextView? = null; private var liveChart:View? = null
+    private var homePnlText:TextView? = null; private var homeCapitalText:TextView? = null; private var homePercentText:TextView? = null
     private val marketPriceViews = mutableMapOf<String, TextView>()
     private val sparklineViews = mutableListOf<View>()
     private var page="Inicio"; private var selected="BTC-USDT"; private var chartBar="1H"
@@ -41,8 +42,9 @@ class MainActivity : Activity() {
         render(); handler.post(refreshRunnable)
     }
     private val refreshRunnable=object:Runnable { override fun run(){ if(::root.isInitialized){
-        updateSummary()
         val snapshots=NativeTradingEngine.snapshots()
+        updateSummary(snapshots)
+        if (page=="Inicio") updateHomeTotals(snapshots)
         snapshots.forEach { snap -> marketPriceViews[snap.symbol]?.text=if(snap.price>0)String.format(Locale.US,"%,.4f",snap.price) else "—" }
         detailPrice?.let { priceView -> snapshots.firstOrNull{it.symbol==selected}?.let { snap -> priceView.text=if(snap.price>0)String.format(Locale.US,"%,.2f",snap.price) else "Esperando precio…" } }
         sparklineViews.forEach { it.invalidate() }; liveChart?.invalidate()
@@ -52,7 +54,7 @@ class MainActivity : Activity() {
         root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setBackgroundColor(bg)}
         val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(18),dp(12),dp(18),dp(8))}
         val brand=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
-        brand.addView(text("🔷  Crypto Futures",20f,Color.WHITE,true)); brand.addView(text("       Simulador de Futuros · v0.4",11f,muted,false))
+        brand.addView(text("🔷  Crypto Futures",20f,Color.WHITE,true)); brand.addView(text("       Simulador de Futuros · v0.5",11f,muted,false))
         header.addView(brand,LinearLayout.LayoutParams(0,-2,1f)); header.addView(text("♧  ◉",20f,Color.WHITE,true)); root.addView(header)
         summary=text("",11f,green,true).apply{setPadding(dp(12),dp(2),dp(12),dp(8));maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END}; root.addView(summary)
         val scroll=ScrollView(this).apply{isFillViewport=true;clipToPadding=false}
@@ -74,10 +76,17 @@ class MainActivity : Activity() {
         root.requestApplyInsets()
         updateScreen()
     }
-    private fun updateSummary() {
+    private fun updateSummary(snapshots:List<BotSnapshot> = NativeTradingEngine.snapshots()) {
         if(!::summary.isInitialized)return
-        val pnl=NativeTradingEngine.snapshots().sumOf{it.pnl}
-        summary.text="P/L NETO SIMULADO  "+money(pnl)+"     ·     CAPITAL "+money(NativeTradingEngine.snapshots().sumOf{it.balance})
+        val pnl=snapshots.sumOf{it.pnl}
+        summary.text="P/L NETO SIMULADO  "+money(pnl)+"     ·     CAPITAL "+money(snapshots.sumOf{it.balance})
+    }
+    private fun updateHomeTotals(snapshots:List<BotSnapshot>) {
+        val pnl=snapshots.sumOf{it.pnl}
+        val capital=snapshots.sumOf{it.balance}
+        homePnlText?.let { it.text=(if(pnl>=0) "+" else "")+money(pnl); it.setTextColor(if(pnl>=0)green else Color.rgb(255,64,75)) }
+        homeCapitalText?.text="Capital total: "+money(capital)
+        homePercentText?.let { it.text=String.format(Locale.US,"%+.2f%%",if(capital>0) pnl/capital*100.0 else 0.0); it.setTextColor(if(pnl>=0)green else Color.rgb(255,64,75)) }
     }
     private fun updateScreen() {
         if(!::content.isInitialized)return
@@ -297,16 +306,20 @@ class MainActivity : Activity() {
         content.addView(text("● Alcista     ● Bajista                 VOLUMEN · VELAS "+chartBar,10f,muted,false))
     }
     private fun overviewCard(pnl:Double,capital:Double){
+        homePnlText=null; homeCapitalText=null; homePercentText=null
         val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(12),dp(14),dp(12));setBackgroundColor(card)}
         val titleRow=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
         titleRow.addView(text("Ganancia/Pérdida Total",15f,Color.WHITE,true),LinearLayout.LayoutParams(0,-2,1f))
         titleRow.addView(text("×",14f,muted,false))
         box.addView(titleRow)
-        box.addView(text("Capital total: "+money(capital),11f,muted,false))
+        homeCapitalText=text("Capital total: "+money(capital),11f,muted,false)
+        box.addView(homeCapitalText)
         val profit=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
-        profit.addView(text((if(pnl>=0) "+" else "")+money(pnl),26f,if(pnl>=0)green else Color.rgb(255,64,75),true))
+        homePnlText=text((if(pnl>=0) "+" else "")+money(pnl),26f,if(pnl>=0)green else Color.rgb(255,64,75),true)
+        profit.addView(homePnlText)
         profit.addView(Space(this),LinearLayout.LayoutParams(dp(8),dp(1)))
-        profit.addView(text(String.format(Locale.US,"%+.2f%%",pnl/1000.0*100),12f,if(pnl>=0)green else Color.rgb(255,64,75),true))
+        homePercentText=text(String.format(Locale.US,"%+.2f%%",if(capital>0)pnl/capital*100.0 else 0.0),12f,if(pnl>=0)green else Color.rgb(255,64,75),true)
+        profit.addView(homePercentText)
         box.addView(profit)
         content.addView(box,LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,dp(4),0,dp(8))})
     }
