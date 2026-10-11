@@ -594,7 +594,7 @@ function stepBot(a,now){
   if(now<cooldownUntil||!fresh()){watchSide=0;return;}
   const riskBlock=entryRiskBlock(now);
   if(riskBlock){watchSide=0;holdMsg=riskBlock;return;}
-  if(mag>=thr&&a.agree>=MIN_AGREE){
+  if(mag>=thr&&a.agree>=MIN_AGREE&&a.confidence>=50){
     if(!volOk){holdMsg='Hay señal, pero la volatilidad es muy baja para cubrir comisiones.';watchSide=sg;return;}
     const pl=plan(sg,a,px);
     pend={type:'ENTER',side:sg,start:now,due:now+S.notice*1000,plan:pl,warned10:S.notice<=10,lastSec:null};
