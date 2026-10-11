@@ -137,12 +137,32 @@ class MainActivity : Activity() {
         val names=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(10),0,0,0)}
         names.addView(text(b.symbol.substringBefore("-"),14f,Color.WHITE,true)); names.addView(text(when(b.symbol){"BTC-USDT"->"Bitcoin";"ETH-USDT"->"Ethereum";"SOL-USDT"->"Solana";"DOGE-USDT"->"Dogecoin";else->b.symbol.substringBefore("-")},10f,muted,false))
         row.addView(names,LinearLayout.LayoutParams(0,-2,1f))
+        row.addView(sparkline(b.symbol),LinearLayout.LayoutParams(dp(42),dp(24)).apply{setMargins(dp(5),0,dp(7),0)})
         val quote=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.END}
         quote.addView(text(if(b.price>0)String.format(Locale.US,"%,.4f",b.price)else "—",12f,Color.WHITE,true))
         quote.addView(text(String.format(Locale.US,"%+.2f%%",b.pnl),11f,if(b.pnl>=0)green else Color.RED,true))
         row.addView(quote,LinearLayout.LayoutParams(-2,-2))
         parent.addView(row)
         parent.addView(View(this).apply{setBackgroundColor(Color.rgb(25,39,53))},LinearLayout.LayoutParams(-1,1))
+    }
+    private fun sparkline(symbol:String):View{
+        val data=NativeTradingEngine.candles(symbol).takeLast(24)
+        return object:View(this){
+            private val p=Paint(Paint.ANTI_ALIAS_FLAG)
+            override fun onDraw(c:Canvas){
+                if(data.size<2)return
+                val lo=data.minOf{it.close};val hi=data.maxOf{it.close};val span=(hi-lo).takeIf{it>0}?:1.0
+                p.color=if(data.last().close>=data.first().close)green else Color.rgb(255,77,90)
+                p.strokeWidth=dp(1.5).toFloat();p.style=Paint.Style.STROKE
+                val path=Path()
+                data.forEachIndexed{i,k->
+                    val x=width.toFloat()*i/(data.size-1)
+                    val y=height.toFloat()*(0.92f-((k.close-lo)/span).toFloat()*0.82f)
+                    if(i==0)path.moveTo(x,y)else path.lineTo(x,y)
+                }
+                c.drawPath(path,p);p.style=Paint.Style.FILL
+            }
+        }
     }
     private fun controls(symbol:String,risk:Double,leverage:Int){
         cardBlock("Riesgo por operación",risk.toInt().toString()+"% del balance como riesgo teórico")
