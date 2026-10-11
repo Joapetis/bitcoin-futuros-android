@@ -704,6 +704,7 @@ function updateUI(now){
   }
   // cuenta
   let eq=B.balance;if(P&&L)eq+=P.realized+P.side*(L.c-P.entry)*P.qty-L.c*P.qty*FEE;
+  const reportNow=Date.now();if(!window.__lastMultibotReport||reportNow-window.__lastMultibotReport>=1000){window.__lastMultibotReport=reportNow;try{parent.postMessage({type:'multibot-report',symbol:S.symbol,equity:eq,pnl:eq-START,pct:(eq-START)/START*100,ready:!!(L&&fresh()),price:L?L.c:null},'*');}catch(e){}}
   const tr=B.trades,wins=tr.filter(t=>t.pnl>0),loss=tr.filter(t=>t.pnl<=0),gw=wins.reduce((s,t)=>s+t.pnl,0),gl=Math.abs(loss.reduce((s,t)=>s+t.pnl,0));
   $('aEq').textContent=fmt(eq)+' USDT';
   const res=eq-START;$('aPnl').textContent=sgnStr(res)+' ('+sgnStr(res/START*100,1)+'%)';$('aPnl').className=res>=0?'pos':'neg';
