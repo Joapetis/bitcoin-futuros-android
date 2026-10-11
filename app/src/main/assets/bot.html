@@ -280,11 +280,11 @@ const PARAM_SYMBOL=new URLSearchParams(location.search).get('symbol');
 const BOT_SYMBOLS=['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','DOGEUSDT','BNBUSDT','LINKUSDT','ADAUSDT','AVAXUSDT','SUIUSDT'];
 const FIXED_SYMBOL=BOT_SYMBOLS.includes(PARAM_SYMBOL)?PARAM_SYMBOL:'BTCUSDT';
 const STORE_KEY=FIXED_SYMBOL==='BTCUSDT'?'btcbot.v1':`btcbot.v1.${FIXED_SYMBOL}`;
-const DEF={tf:'1h',symbol:FIXED_SYMBOL,lev:10,sound:true,notice:10,thr:31,risk:5,ver:6,slMult:1.5,ov:{ema:true,vwap:true,bb:false}};
+const DEF={tf:'1h',symbol:FIXED_SYMBOL,lev:100,sound:true,notice:10,thr:31,risk:5,ver:6,slMult:1.5,ov:{ema:true,vwap:true,bb:false}};
 let S=JSON.parse(JSON.stringify(DEF));
 let B={balance:START,trades:[],pos:null};
-try{const raw=localStorage.getItem(STORE_KEY);if(raw){const o=JSON.parse(raw);const oldVer=Number((o.S||{}).ver)||0;S=Object.assign(S,o.S||{});S.ov=Object.assign({},DEF.ov,(o.S||{}).ov||{});B=Object.assign(B,o.B||{});if(oldVer<4){S.thr=31;S.risk=0.5;S.notice=10;S.ver=4;B={balance:START,trades:[],pos:null};}if(oldVer<6){S.tf='1h';S.risk=5;S.lev=10;S.ver=6;}}}catch(e){}
-if(!TFS[S.tf])S.tf='1h';S.symbol=FIXED_SYMBOL;S.lev=clamp(+S.lev||10,1,100);
+try{const raw=localStorage.getItem(STORE_KEY);if(raw){const o=JSON.parse(raw);const oldVer=Number((o.S||{}).ver)||0;S=Object.assign(S,o.S||{});S.ov=Object.assign({},DEF.ov,(o.S||{}).ov||{});B=Object.assign(B,o.B||{});if(oldVer<4){S.thr=31;S.risk=0.5;S.notice=10;S.ver=4;B={balance:START,trades:[],pos:null};}if(oldVer<6){S.tf='1h';S.risk=5;S.lev=100;S.ver=6;}}}catch(e){}
+if(!TFS[S.tf])S.tf='1h';S.symbol=FIXED_SYMBOL;S.lev=clamp(+S.lev||100,1,100);
 S.notice=clamp(Number(S.notice)||10,10,120);S.thr=clamp(Number(S.thr)||31,10,80);S.risk=clamp(Number(S.risk)||5,0.25,100);S.slMult=clamp(Number(S.slMult)||1.5,0.5,5);
 if(!Number.isFinite(B.balance)||B.balance<0)B.balance=START;if(!Array.isArray(B.trades))B.trades=[];if(!('pos' in B))B.pos=null;
 const save=()=>{try{localStorage.setItem(STORE_KEY,JSON.stringify({S,B}));}catch(e){}};
@@ -498,7 +498,7 @@ function analyze(){
 function plan(side,a,price){const d=Math.max(a.atr*S.slMult,price*MIN_STOP);return {side,entry:price,stopDist:d,sl:price-side*d,tp1:price+side*d*1.5,tp2:price+side*d*3};}
 function sizing(pl){
   if(!pl||!Number.isFinite(pl.entry)||pl.entry<=0||!Number.isFinite(pl.stopDist)||pl.stopDist<=0||!Number.isFinite(B.balance)||B.balance<=0)return {qty:0,risk:0,notional:0};
-  const riskBudget=B.balance*clamp(+S.risk||0.5,0.25,5)/100;
+  const riskBudget=B.balance*clamp(+S.risk||5,0.25,100)/100;
   // El riesgo incluye comisiones y deslizamiento de entrada y salida, para que un stop loss cueste ≈1 R reales.
   const perUnit=pl.stopDist+pl.entry*2*(FEE+SLIP);
   const qRisk=riskBudget/perUnit,mq=B.balance*S.lev/pl.entry;
