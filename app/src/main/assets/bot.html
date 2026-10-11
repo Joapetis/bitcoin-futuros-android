@@ -280,12 +280,12 @@ const PARAM_SYMBOL=new URLSearchParams(location.search).get('symbol');
 const BOT_SYMBOLS=['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','DOGEUSDT','BNBUSDT','LINKUSDT','ADAUSDT','AVAXUSDT','SUIUSDT'];
 const FIXED_SYMBOL=BOT_SYMBOLS.includes(PARAM_SYMBOL)?PARAM_SYMBOL:'BTCUSDT';
 const STORE_KEY=FIXED_SYMBOL==='BTCUSDT'?'btcbot.v1':`btcbot.v1.${FIXED_SYMBOL}`;
-const DEF={tf:'1h',symbol:FIXED_SYMBOL,lev:100,sound:true,notice:10,thr:31,risk:5,ver:6,slMult:1.5,ov:{ema:true,vwap:true,bb:false}};
+const DEF={tf:'1h',symbol:FIXED_SYMBOL,lev:100,sound:true,notice:0,thr:31,risk:5,ver:7,slMult:1.5,ov:{ema:true,vwap:true,bb:false}};
 let S=JSON.parse(JSON.stringify(DEF));
 let B={balance:START,trades:[],pos:null};
-try{const raw=localStorage.getItem(STORE_KEY);if(raw){const o=JSON.parse(raw);const oldVer=Number((o.S||{}).ver)||0;S=Object.assign(S,o.S||{});S.ov=Object.assign({},DEF.ov,(o.S||{}).ov||{});B=Object.assign(B,o.B||{});if(oldVer<4){S.thr=31;S.risk=0.5;S.notice=10;S.ver=4;B={balance:START,trades:[],pos:null};}if(oldVer<6){S.tf='1h';S.risk=5;S.lev=100;S.ver=6;}}}catch(e){}
+try{const raw=localStorage.getItem(STORE_KEY);if(raw){const o=JSON.parse(raw);const oldVer=Number((o.S||{}).ver)||0;S=Object.assign(S,o.S||{});S.ov=Object.assign({},DEF.ov,(o.S||{}).ov||{});B=Object.assign(B,o.B||{});if(oldVer<4){S.thr=31;S.risk=0.5;S.notice=10;S.ver=4;B={balance:START,trades:[],pos:null};}if(oldVer<6){S.tf='1h';S.risk=5;S.lev=100;S.ver=6;}if(oldVer<7){S.notice=0;S.ver=7;}}}catch(e){}
 if(!TFS[S.tf])S.tf='1h';S.symbol=FIXED_SYMBOL;S.lev=clamp(+S.lev||100,1,100);
-S.notice=clamp(Number(S.notice)||10,10,120);S.thr=clamp(Number(S.thr)||31,10,80);S.risk=clamp(Number(S.risk)||5,0.25,100);S.slMult=clamp(Number(S.slMult)||1.5,0.5,5);
+S.notice=0;S.thr=clamp(Number(S.thr)||31,10,80);S.risk=clamp(Number(S.risk)||5,0.25,100);S.slMult=clamp(Number(S.slMult)||1.5,0.5,5);
 if(!Number.isFinite(B.balance)||B.balance<0)B.balance=START;if(!Array.isArray(B.trades))B.trades=[];if(!('pos' in B))B.pos=null;
 const save=()=>{try{localStorage.setItem(STORE_KEY,JSON.stringify({S,B}));}catch(e){}};
 
@@ -610,12 +610,9 @@ function stepBot(a,now){
   if(riskBlock){watchSide=0;holdMsg=riskBlock;return;}
   if(mag>=thr&&a.agree>=MIN_AGREE&&a.confidence>=55&&a.consensus>=0.38){
     if(!volOk){holdMsg='Hay señal, pero la volatilidad es muy baja para cubrir comisiones.';watchSide=sg;return;}
-    const pl=plan(sg,a,px);
-    pend={type:'ENTER',side:sg,start:now,due:now+S.notice*1000,plan:pl,warned10:S.notice<=10,lastSec:null};
+    // Ejecución simulada inmediata: sin cuenta atrás ni aviso previo.
     watchSide=sg;
-    alertUser(sg>0?'long':'short',`Señal de ${sideWord(sg)} (${sg>0?'long':'short'})`,
-      `La operación simulada se abrirá automáticamente en ${S.notice} s si la señal continúa válida. Entrada ≈ ${fmt(pl.entry,1)}; stop loss ${fmt(pl.sl,1)} y objetivos ${fmt(pl.tp1,1)} / ${fmt(pl.tp2,1)} se gestionan automáticamente.`,
-      {say:`Señal de ${sg>0?'compra':'venta'}. Entrada en ${S.notice} segundos`,ttl:12000});
+    openPos(sg,a,now);
   }else{
     const w=mag>=thr*0.75?sg:0;
     if(w!==watchSide&&w!==0)alertUser('info',`Posible ${w>0?'compra':'venta'}`,'Se está formando confluencia, aún faltan confirmaciones.',{quiet:true});
@@ -662,8 +659,8 @@ function managePos(a,now){
     if(!still){alertUser('info','Cierre cancelado','La señal contraria desapareció. La posición sigue abierta.');pend=null;}
     else{pendTicks(now);if(now>=pend.due){closePos(px,'Señal contraria',now);}}
   }else if(sg===-s&&mag>=exitThr&&a.agree>=4&&fresh()){
-    pend={type:'EXIT',side:-s,start:now,due:now+S.notice*1000,plan:null,warned10:S.notice<=10,lastSec:null};
-    alertUser('warn','Posible cierre por señal contraria',`Las estrategias se invirtieron. Se cerrará en ${S.notice} s si se mantiene.`,{say:'Posible cierre por señal contraria'});
+    // Cierre inmediato ante señal contraria suficientemente fuerte.
+    closePos(px,'Señal contraria',now);
   }
 }
 
@@ -724,7 +721,7 @@ function updateUI(now){
     else if(!fresh())msg='Sin ticks recientes de OKX/Bybit: no se abrirán operaciones con precio obsoleto. El bot intentará cambiar de fuente automáticamente; comprueba la conexión del VPS si persiste.';
     else if(now<cooldownUntil)msg=`Pausa tras la última operación (${mmss(cooldownUntil-now)}).`;
     else if(holdMsg)msg=holdMsg;
-    else if(watchSide){badge=`Posible ${watchSide>0?'compra':'venta'}`;msg=`Puntuación aún por confirmar: se exige ${S.thr} puntos y ${MIN_AGREE} estrategias. Si se confirma, la operación simulada se abrirá automáticamente tras ${S.notice} s.`;}
+    else if(watchSide){badge=`Posible ${watchSide>0?'compra':'venta'}`;msg=`Puntuación aún por confirmar: se exige ${S.thr} puntos y ${MIN_AGREE} estrategias. Si se confirma, la operación simulada se abrirá automáticamente en ese momento.`;}
     if(a){$('cd').textContent=(a.score>=0?'+':'')+Math.round(a.score);$('cdLbl').textContent='puntuación';
       ring.style.strokeDashoffset=C*(1-clamp(Math.abs(a.score)/S.thr,0,1));}
   }
@@ -856,7 +853,7 @@ function bind(){
   const nt=()=>{$('vNotice').textContent=S.notice+' s';$('vThr').textContent=S.thr;};
   $('sSymbol').value=S.symbol;$('sSymbol').disabled=true;$('sSymbol').style.display='none';$('sLev').value=String(S.lev);
   $('sLev').addEventListener('change',e=>{S.lev=clamp(+e.target.value||1,1,100);e.target.value=String(S.lev);save();});
-  $('sNotice').value=S.notice;$('sThr').value=S.thr;$('sRisk').value=S.risk;$('sSl').value=String(S.slMult);nt();sync();
+  $('sNotice').value=0;$('sNotice').disabled=true;$('sNotice').title='Las operaciones se ejecutan sin demora';$('sThr').value=S.thr;$('sRisk').value=S.risk;$('sSl').value=String(S.slMult);nt();sync();
   $('sNotice').addEventListener('input',e=>{S.notice=Math.max(10,+e.target.value);nt();save();});
   $('sThr').addEventListener('input',e=>{S.thr=+e.target.value;nt();save();});
   $('sRisk').addEventListener('change',e=>{S.risk=clamp(+e.target.value||5,0.25,100);e.target.value=S.risk;save();});
