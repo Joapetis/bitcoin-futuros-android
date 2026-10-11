@@ -140,7 +140,8 @@ class MainActivity : Activity() {
         row.addView(sparkline(b.symbol),LinearLayout.LayoutParams(dp(42),dp(24)).apply{setMargins(dp(5),0,dp(7),0)})
         val quote=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.END}
         quote.addView(text(if(b.price>0)String.format(Locale.US,"%,.4f",b.price)else "—",12f,Color.WHITE,true))
-        quote.addView(text(String.format(Locale.US,"%+.2f%%",b.pnl),11f,if(b.pnl>=0)green else Color.RED,true))
+        val change=NativeTradingEngine.marketChange24h(b.symbol)
+        quote.addView(text(String.format(Locale.US,"%+.2f%%",change),11f,if(change>=0)green else Color.RED,true))
         row.addView(quote,LinearLayout.LayoutParams(-2,-2))
         parent.addView(row)
         parent.addView(View(this).apply{setBackgroundColor(Color.rgb(25,39,53))},LinearLayout.LayoutParams(-1,1))
