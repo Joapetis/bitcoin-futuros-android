@@ -136,7 +136,7 @@ object NativeTradingEngine {
                 val targetHit = if (side == "LONG") close >= target else close <= target
                 if (stopHit || targetHit || (signal != "FLAT" && signal != side)) {
                     val gross = (if (side == "LONG") close-entry else entry-close) / entry * b.optDouble("qty")
-                    val fee = b.optDouble("qty") * close * 0.0006
+                    val fee = b.optDouble("qty") * 0.0012
                     val net = gross-fee
                     b.put("balance", max(0.0, b.optDouble("balance")+net))
                     if (net > 0) b.put("wins", b.optInt("wins")+1) else b.put("losses", b.optInt("losses")+1)
@@ -150,7 +150,7 @@ object NativeTradingEngine {
                 val riskCash = b.optDouble("balance") * b.optDouble("risk",5.0)/100.0
                 val stopDistance = max(atr*1.8, close*0.001)
                 val maxNotional = b.optDouble("balance") * b.optInt("leverage",100)
-                val qty = min(riskCash / stopDistance, maxNotional / close)
+                val qty = min(riskCash * close / stopDistance, maxNotional)
                 if (qty > 0 && qty.isFinite()) {
                     val stop = if(signal=="LONG") close-stopDistance else close+stopDistance
                     val target = if(signal=="LONG") close+atr*2.7 else close-atr*2.7
