@@ -11,6 +11,7 @@ import android.graphics.Path
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -29,6 +30,7 @@ class MainActivity : Activity() {
     private val marketPriceViews = mutableMapOf<String, TextView>()
     private val sparklineViews = mutableListOf<View>()
     private var page="Inicio"; private var selected="BTC-USDT"; private var chartBar="1H"
+    private val backupPicker=4102
     private val symbols=listOf("BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","DOGE-USDT","BNB-USDT","LINK-USDT","ADA-USDT","AVAX-USDT","SUI-USDT")
     private fun dp(value:Int):Int = (value * resources.displayMetrics.density + 0.5f).toInt()
     private fun money(v:Double)=String.format(Locale.US,"%,.2f USDT",v)
@@ -197,6 +199,14 @@ class MainActivity : Activity() {
                 cardBlock("Comisiones Binance USDⓈ-M Futures · usuario estándar","Modelo de simulación VIP 0: taker 0,05% por lado en órdenes de mercado y maker 0,02% por lado en órdenes límite que aportan liquidez. El bot simula entradas y salidas como taker. Deslizamiento supuesto aparte: 0,02% por lado; financiación estimada: 0,01% cada 8 h, variable según contrato y momento. Binance puede aplicar descuentos/promociones y las tarifas pueden cambiar; estas son las tasas estándar de referencia, no una consulta de tu cuenta.")
                 cardBlock("IA neuronal local adaptativa","Red neuronal multicapa 12-10-1: tendencia, momentum en tres ventanas, volatilidad ATR, volumen relativo, RSI, alineación EMA, eficiencia direccional, cuerpo de vela y tendencia larga. Se ejecuta en el móvil y conserva sus pesos por bot. Modelo experimental; no garantiza rentabilidad.")
                 cardBlock("General","Modo oscuro · Español\nDatos públicos de mercado · Sin claves privadas\nSolo simulación: no se envían órdenes reales. La viabilidad debe comprobarse con backtesting temporal y paper trading.")
+                panel("Respaldos entre versiones","Guarda el aprendizaje, saldos simulados e historial fuera de los datos privados de la app.")
+                cardBlock("Carpeta de respaldo",NativeTradingEngine.backupFolderLabel()+"\nSe crea CryptoFutures/backups/state-v1.json dentro de la carpeta elegida.")
+                actionButton("Seleccionar carpeta para respaldos") {
+                    val intent=Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                    startActivityForResult(intent,backupPicker)
+                }
+                cardBlock("Importante","El respaldo se actualiza automáticamente. Antes de desinstalar, confirma que state-v1.json existe en la carpeta elegida. Para actualizar, instala el APK encima sin desinstalar; si Android indica conflicto de firma, el respaldo protege los datos, pero no corrige la firma del APK.")
                 cardBlock("Continuidad","Android puede limitar procesos en segundo plano. Revisa la optimización de batería para mejorar la continuidad.")
             }
         }
@@ -336,5 +346,15 @@ class MainActivity : Activity() {
     private fun panel(title:String,subtitle:String){content.addView(text(title,21f,Color.WHITE,true));content.addView(text(subtitle,11f,muted,false));content.addView(View(this),LinearLayout.LayoutParams(1,dp(7)))}
     private fun actionButton(label:String,action:()->Unit){content.addView(Button(this).apply{text=label;isAllCaps=false;textSize=13f;setTextColor(Color.WHITE);setBackgroundColor(blue);setOnClickListener{action()}},LinearLayout.LayoutParams(-1,-2))}
     private fun text(value:String,size:Float,color:Int,bold:Boolean)=TextView(this).apply{text=value;textSize=size;setTextColor(color);if(bold)setTypeface(typeface,Typeface.BOLD);setPadding(0,dp(4),0,dp(4))}
+    @Deprecated("Deprecated in Android API")
+    override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
+        super.onActivityResult(requestCode,resultCode,data)
+        if(requestCode==backupPicker && resultCode==RESULT_OK) {
+            val uri=data?.data ?: return
+            val message=NativeTradingEngine.setBackupFolder(uri)
+            Toast.makeText(this,message,Toast.LENGTH_LONG).show()
+            updateScreen()
+        }
+    }
     override fun onDestroy(){handler.removeCallbacks(refreshRunnable);super.onDestroy()}
 }
