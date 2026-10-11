@@ -6,6 +6,12 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import java.util.concurrent.TimeUnit
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -39,6 +45,17 @@ object NativeTradingEngine {
     private val candleCache = linkedMapOf<String, List<CandleSnapshot>>()
     private val chartCandleCache = linkedMapOf<String, List<CandleSnapshot>>()
     private val chartExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val quoteClient = OkHttpClient.Builder()
+        .pingInterval(20, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+    private var bybitSocket: WebSocket? = null
+    private var binanceSocket: WebSocket? = null
+    private val bybitQuotes = linkedMapOf<String, Double>()
+    private val binanceQuotes = linkedMapOf<String, Double>()
+    private var bybitConnectedAt = 0L
+    private var binanceConnectedAt = 0L
+    private var quoteSocketStarted = false
     private lateinit var app: Context
     private var lastError = ""
     private var initialized = false
@@ -80,6 +97,7 @@ object NativeTradingEngine {
         // Keep model state and trade ledger intact across code/version upgrades.
         saveLocked()
         initialized = true
+        startQuoteStreamsLocked()
     }
 
     fun setRisk(symbol: String, risk: Double) = synchronized(lock) {
@@ -102,6 +120,141 @@ object NativeTradingEngine {
         }
     }
     fun candles(symbol: String): List<CandleSnapshot> = synchronized(lock) { candleCache[symbol]?.toList() ?: emptyList() }
+
+    // Bybit linear futures is the primary live quote feed; Binance Futures is an independent
+    // secondary reference. OKX REST remains the fallback when both streams are unavailable.
+    fun liveQuoteSource(): String = synchronized(lock) {
+        when {
+            bybitQuotes.values.any { it > 0.0 } -> "Bybit Futures · principal"
+            binanceQuotes.values.any { it > 0.0 } -> "Binance Futures · respaldo"
+            else -> "OKX REST · respaldo"
+        }
+    }
+
+    private fun startQuoteStreamsLocked() {
+        if (quoteSocketStarted) return
+        quoteSocketStarted = true
+        val bybitRequest = Request.Builder().url("wss://stream.bybit.com/v5/public/linear").build()
+        bybitSocket = quoteClient.newWebSocket(bybitRequest, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                bybitConnectedAt = System.currentTimeMillis()
+                val args = JSONArray()
+                symbols.forEach { args.put("tickers." + it.replace("-", "")) }
+                webSocket.send(JSONObject().put("op", "subscribe").put("args", args).toString())
+            }
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                try {
+                    val root = JSONObject(text)
+                    val topic = root.optString("topic")
+                    if (!topic.startsWith("tickers.")) return
+                    val data = root.optJSONObject("data") ?: return
+                    val symbol = data.optString("symbol").replace("USDT", "-USDT")
+                    val price = data.optString("lastPrice").toDoubleOrNull() ?: return
+                    if (symbol in symbols && price > 0.0) synchronized(lock) {
+                        bybitQuotes[symbol] = price
+                        bots[symbol]?.put("price", price).put("priceSource", "BYBIT")
+                    }
+                } catch (_: Exception) {}
+            }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                synchronized(lock) { if (bybitSocket === webSocket) bybitSocket = null }
+                quoteClient.dispatcher.executorService.execute {
+                    try { Thread.sleep(3000) } catch (_: InterruptedException) { return@execute }
+                    synchronized(lock) { bybitSocket = null; startSingleBybitReconnectLocked() }
+                }
+            }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                synchronized(lock) { if (bybitSocket === webSocket) bybitSocket = null }
+            }
+        })
+        val streams = symbols.joinToString("/") { it.replace("-", "").lowercase(Locale.US) + "@ticker" }
+        val binanceRequest = Request.Builder().url("wss://fstream.binance.com/stream?streams=$streams").build()
+        binanceSocket = quoteClient.newWebSocket(binanceRequest, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) { binanceConnectedAt = System.currentTimeMillis() }
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                try {
+                    val data = JSONObject(text).optJSONObject("data") ?: return
+                    val symbol = data.optString("s").replace("USDT", "-USDT")
+                    val price = data.optString("c").toDoubleOrNull() ?: return
+                    if (symbol in symbols && price > 0.0) synchronized(lock) {
+                        binanceQuotes[symbol] = price
+                        // Secondary source is stored separately; Bybit remains authoritative while fresh.
+                        if (System.currentTimeMillis() - bybitConnectedAt > 15_000L) {
+                            bots[symbol]?.put("price", price).put("priceSource", "BINANCE")
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                synchronized(lock) { if (binanceSocket === webSocket) binanceSocket = null }
+                quoteClient.dispatcher.executorService.execute {
+                    try { Thread.sleep(4000) } catch (_: InterruptedException) { return@execute }
+                    synchronized(lock) { binanceSocket = null; startBinanceReconnectLocked() }
+                }
+            }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                synchronized(lock) { if (binanceSocket === webSocket) binanceSocket = null }
+            }
+        })
+    }
+
+    private fun startSingleBybitReconnectLocked() {
+        if (bybitSocket != null) return
+        bybitSocket = quoteClient.newWebSocket(Request.Builder().url("wss://stream.bybit.com/v5/public/linear").build(),
+            object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    bybitConnectedAt = System.currentTimeMillis()
+                    val args = JSONArray(); symbols.forEach { args.put("tickers." + it.replace("-", "")) }
+                    webSocket.send(JSONObject().put("op", "subscribe").put("args", args).toString())
+                }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val root = JSONObject(text); if (!root.optString("topic").startsWith("tickers.")) return
+                        val data = root.optJSONObject("data") ?: return
+                        val symbol = data.optString("symbol").replace("USDT", "-USDT")
+                        val price = data.optString("lastPrice").toDoubleOrNull() ?: return
+                        if (symbol in symbols && price > 0.0) synchronized(lock) {
+                            bybitQuotes[symbol] = price; bots[symbol]?.put("price", price).put("priceSource", "BYBIT")
+                        }
+                    } catch (_: Exception) {}
+                }
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    synchronized(lock) { if (bybitSocket === webSocket) bybitSocket = null }
+                    quoteClient.dispatcher.executorService.execute {
+                        try { Thread.sleep(5000) } catch (_: InterruptedException) { return@execute }
+                        synchronized(lock) { startSingleBybitReconnectLocked() }
+                    }
+                }
+            })
+    }
+
+    private fun startBinanceReconnectLocked() {
+        if (binanceSocket != null) return
+        val streams = symbols.joinToString("/") { it.replace("-", "").lowercase(Locale.US) + "@ticker" }
+        binanceSocket = quoteClient.newWebSocket(Request.Builder().url("wss://fstream.binance.com/stream?streams=$streams").build(),
+            object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) { binanceConnectedAt = System.currentTimeMillis() }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val data = JSONObject(text).optJSONObject("data") ?: return
+                        val symbol = data.optString("s").replace("USDT", "-USDT")
+                        val price = data.optString("c").toDoubleOrNull() ?: return
+                        if (symbol in symbols && price > 0.0) synchronized(lock) {
+                            binanceQuotes[symbol] = price
+                            if (System.currentTimeMillis() - bybitConnectedAt > 15_000L)
+                                bots[symbol]?.put("price", price).put("priceSource", "BINANCE")
+                        }
+                    } catch (_: Exception) {}
+                }
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    synchronized(lock) { if (binanceSocket === webSocket) binanceSocket = null }
+                    quoteClient.dispatcher.executorService.execute {
+                        try { Thread.sleep(5000) } catch (_: InterruptedException) { return@execute }
+                        synchronized(lock) { startBinanceReconnectLocked() }
+                    }
+                }
+            })
+    }
 
     // Chart intervals are display-only: separate cache from bot strategy candles.
     fun chartCandles(symbol: String, bar: String): List<CandleSnapshot> = synchronized(lock) {
@@ -144,9 +297,19 @@ object NativeTradingEngine {
 
     private fun processSymbol(symbol: String) {
         // Price updates are independent from strategy candles: a candle request must never freeze the quote.
-        val livePrice = fetchLivePrice(symbol)
+        val streamPrice = synchronized(lock) {
+            when {
+                System.currentTimeMillis() - bybitConnectedAt < 15_000L -> bybitQuotes[symbol]
+                System.currentTimeMillis() - binanceConnectedAt < 15_000L -> binanceQuotes[symbol]
+                else -> null
+            }
+        }
+        val livePrice = streamPrice ?: fetchLivePrice(symbol)
         if (livePrice != null && livePrice > 0.0) {
-            synchronized(lock) { bots[symbol]?.put("price", livePrice) }
+            synchronized(lock) {
+                val b = bots[symbol]
+                if (streamPrice != null || b?.optDouble("price", 0.0) == 0.0) b?.put("price", livePrice)
+            }
         }
         val chosenBar = synchronized(lock) { bots[symbol]?.optString("botBar", "1H") ?: "1H" }
         val candles = fetchCandles(symbol, chosenBar) ?: return
