@@ -94,6 +94,7 @@ object NativeTradingEngine {
                 .put("price", 0.0).put("entry", 0.0).put("qty", 0.0).put("side", "FLAT")
                 .put("stop", 0.0).put("target", 0.0).put("trades", 0).put("wins", 0)
                 .put("losses", 0).put("learned", 0).put("risk", 5.0).put("leverage", 100)
+                .put("injectedCapital", 0.0).put("recharges", 0).put("learningSamples", JSONArray()).put("lastBatchTrained", 0)
                 .put("lastCandle", 0L).put("botBar", "1H").put("nnBias", 0.0).put("nnTrend", 0.0).put("nnMomentum", 0.0)
                 .put("lastSignal", "Analizando mercado").put("history", JSONArray())
         }
@@ -104,7 +105,7 @@ object NativeTradingEngine {
     }
 
     fun setRisk(symbol: String, risk: Double) = synchronized(lock) {
-        bots[symbol]?.put("risk", risk.coerceIn(0.5, 100.0)); saveLocked()
+        bots[symbol]?.put("risk", risk.coerceIn(1.0, 100.0)); saveLocked()
     }
     fun setLeverage(symbol: String, leverage: Int) = synchronized(lock) {
         bots[symbol]?.put("leverage", if (leverage in levOptions) leverage else 10); saveLocked()
@@ -117,12 +118,21 @@ object NativeTradingEngine {
             val side = b.optString("side", "FLAT")
             val floating = if (entry > 0 && p > 0 && side != "FLAT")
                 (if (side == "LONG") p-entry else entry-p) * b.optDouble("qty", 0.0) else 0.0
-            BotSnapshot(s, b.optDouble("balance",100.0), p, b.optDouble("balance",100.0)-b.optDouble("initial",100.0)+floating,
+            BotSnapshot(s, b.optDouble("balance",100.0), p, b.optDouble("balance",100.0)-b.optDouble("initial",100.0)-b.optDouble("injectedCapital",0.0)+floating,
                 side, entry, b.optInt("trades"), b.optInt("wins"), b.optString("lastSignal"),
                 b.optInt("leverage",100), b.optDouble("risk",5.0), b.optInt("learned"))
         }
     }
     fun candles(symbol: String): List<CandleSnapshot> = synchronized(lock) { candleCache[symbol]?.toList() ?: emptyList() }
+
+    fun tradeHistory(symbol: String? = null): List<JSONObject> = synchronized(lock) {
+        val out = mutableListOf<JSONObject>()
+        symbols.filter { symbol == null || it == symbol }.forEach { sym ->
+            val arr = bots[sym]?.optJSONArray("history") ?: JSONArray()
+            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { item -> out.add(JSONObject(item.toString()).put("symbol", sym)) }
+        }
+        out.sortedByDescending { it.optLong("time", 0L) }
+    }
 
     // Bybit linear futures is the primary live quote feed; Binance Futures is an independent
     // secondary reference. OKX REST remains the fallback when both streams are unavailable.
@@ -400,13 +410,57 @@ object NativeTradingEngine {
                     val barsHeld = max(1L, (prevCandleTime - b.optLong("entryCandle", prevCandleTime)) / when (chosenBar) { "15m" -> 900_000L; "4H" -> 14_400_000L; "1D" -> 86_400_000L; else -> HOUR_MS })
                     val funding = entryNotional * FUNDING_RATE_PER_8H * (barsHeld / 8.0)
                     val net = gross - fee - funding
-                    b.put("balance", max(0.0, b.optDouble("balance")+net))
+                    val balanceBefore = b.optDouble("balance")
+                    val balanceAfter = max(0.0, balanceBefore + net)
+                    b.put("balance", balanceAfter)
                     if (net > 0) b.put("wins", b.optInt("wins")+1) else b.put("losses", b.optInt("losses")+1)
-                    learn(b, net > 0, features)
+                    val entryFeaturesJson = b.optJSONArray("entryFeatures") ?: JSONArray()
+                    val entryFeatures = DoubleArray(entryFeaturesJson.length()) { entryFeaturesJson.optDouble(it) }
+                    if (entryFeatures.size == 12) {
+                        learn(b, net > 0, entryFeatures)
+                        val samples = b.optJSONArray("learningSamples") ?: JSONArray()
+                        samples.put(JSONObject().put("won", net > 0).put("pnl", net).put("time", System.currentTimeMillis())
+                            .put("features", entryFeaturesJson).put("strategy", b.optString("entryStrategy", strategy)))
+                        b.put("learningSamples", samples)
+                        val sampleCount = samples.length()
+                        if (sampleCount >= 10 && sampleCount / 10 > b.optInt("lastBatchTrained", 0)) {
+                            val learnedBefore = b.optInt("learned", 0)
+                            val start = max(0, sampleCount - 50)
+                            repeat(2) {
+                                for (i in start until sampleCount) {
+                                    val s = samples.optJSONObject(i) ?: continue
+                                    val fs = s.optJSONArray("features") ?: continue
+                                    if (fs.length() != 12) continue
+                                    learn(b, s.optBoolean("won"), DoubleArray(12) { fs.optDouble(it) })
+                                }
+                            }
+                            b.put("learned", learnedBefore).put("lastBatchTrained", sampleCount / 10)
+                        }
+                    }
                     val h = b.optJSONArray("history") ?: JSONArray()
-                    h.put(JSONObject().put("time", System.currentTimeMillis()).put("side", side).put("entry",entry).put("exit",exitPrice).put("pnl",net).put("reason",if(stopHit) "Stop ATR" else if(targetHit) "Objetivo ATR" else "Señal contraria"))
-                    while (h.length()>300) h.remove(0)
-                    b.put("history",h).put("side","FLAT").put("entry",0.0).put("qty",0.0).put("stop",0.0).put("target",0.0).put("trades",b.optInt("trades")+1)
+                    val entryTime = b.optLong("entryTime", System.currentTimeMillis())
+                    h.put(JSONObject()
+                        .put("type", "TRADE").put("time", System.currentTimeMillis()).put("entryTime", entryTime)
+                        .put("side", side).put("entry", entry).put("exit", exitPrice).put("qty", qty)
+                        .put("entryNotional", entryNotional).put("gross", gross).put("fees", fee)
+                        .put("funding", funding).put("pnl", net).put("balanceBefore", balanceBefore)
+                        .put("balanceAfter", balanceAfter).put("leverage", b.optInt("leverage", 1))
+                        .put("riskPercent", b.optDouble("risk", 5.0)).put("stop", stop).put("target", target)
+                        .put("strategy", b.optString("entryStrategy", strategy)).put("timeframe", chosenBar)
+                        .put("predictedWin", b.optDouble("entryPredictedWin", 0.5))
+                        .put("durationMs", max(0L, System.currentTimeMillis() - entryTime))
+                        .put("reason", if(stopHit) "Stop ATR" else if(targetHit) "Objetivo ATR" else "Señal contraria")
+                        .put("modelSamples", b.optInt("learned", 0)))
+                    b.put("history",h).put("side","FLAT").put("entry",0.0).put("qty",0.0).put("stop",0.0).put("target",0.0)
+                        .put("entryFeatures", JSONArray()).put("trades",b.optInt("trades")+1)
+                    if (balanceAfter <= 0.000001) {
+                        val refill = max(1.0, b.optDouble("initial", 100.0))
+                        b.put("balance", refill).put("injectedCapital", b.optDouble("injectedCapital", 0.0) + refill)
+                            .put("recharges", b.optInt("recharges", 0) + 1)
+                        h.put(JSONObject().put("type", "RECHARGE").put("time", System.currentTimeMillis())
+                            .put("amount", refill).put("reason", "Recarga automática de capital simulado para continuar el entrenamiento")
+                            .put("balanceAfter", refill).put("pnl", 0.0))
+                    }
                 }
             } else if (side == "FLAT" && newCandle && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
                 val riskCash = b.optDouble("balance") * b.optDouble("risk",5.0)/100.0
@@ -428,6 +482,8 @@ object NativeTradingEngine {
                     val target = if(signal=="LONG") executedEntry+targetDistance else executedEntry-targetDistance
                     b.put("side",signal).put("entry",executedEntry).put("qty",qty).put("stop",stop).put("target",target)
                         .put("lastEntryCandle",prevCandleTime).put("entryCandle",prevCandleTime)
+                        .put("entryTime", System.currentTimeMillis()).put("entryStrategy", strategy)
+                        .put("entryPredictedWin", predictedWin).put("entryFeatures", JSONArray().also { arr -> features.forEach { arr.put(it) } })
                 } else {
                     b.put("lastSignal", "$strategy · Entrada filtrada por costes/IA (${(predictedWin*100).toInt()}%)")
                 }
