@@ -152,7 +152,7 @@ object NativeTradingEngine {
                     val price = data.optString("lastPrice").toDoubleOrNull() ?: return
                     if (symbol in symbols && price > 0.0) synchronized(lock) {
                         bybitQuotes[symbol] = price
-                        bots[symbol]?.put("price", price).put("priceSource", "BYBIT")
+                        bots[symbol]?.put("price", price)?.put("priceSource", "BYBIT")
                     }
                 } catch (_: Exception) {}
             }
@@ -180,7 +180,7 @@ object NativeTradingEngine {
                         binanceQuotes[symbol] = price
                         // Secondary source is stored separately; Bybit remains authoritative while fresh.
                         if (System.currentTimeMillis() - bybitConnectedAt > 15_000L) {
-                            bots[symbol]?.put("price", price).put("priceSource", "BINANCE")
+                            bots[symbol]?.put("price", price)?.put("priceSource", "BINANCE")
                         }
                     }
                 } catch (_: Exception) {}
@@ -214,7 +214,7 @@ object NativeTradingEngine {
                         val symbol = data.optString("symbol").replace("USDT", "-USDT")
                         val price = data.optString("lastPrice").toDoubleOrNull() ?: return
                         if (symbol in symbols && price > 0.0) synchronized(lock) {
-                            bybitQuotes[symbol] = price; bots[symbol]?.put("price", price).put("priceSource", "BYBIT")
+                            bybitQuotes[symbol] = price; bots[symbol]?.put("price", price)?.put("priceSource", "BYBIT")
                         }
                     } catch (_: Exception) {}
                 }
@@ -242,7 +242,7 @@ object NativeTradingEngine {
                         if (symbol in symbols && price > 0.0) synchronized(lock) {
                             binanceQuotes[symbol] = price
                             if (System.currentTimeMillis() - bybitConnectedAt > 15_000L)
-                                bots[symbol]?.put("price", price).put("priceSource", "BINANCE")
+                                bots[symbol]?.put("price", price)?.put("priceSource", "BINANCE")
                         }
                     } catch (_: Exception) {}
                 }
