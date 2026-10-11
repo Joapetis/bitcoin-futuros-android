@@ -79,11 +79,11 @@ class MainActivity : Activity() {
     private fun updateSummary(snapshots:List<BotSnapshot> = NativeTradingEngine.snapshots()) {
         if(!::summary.isInitialized)return
         val pnl=snapshots.sumOf{it.pnl}
-        summary.text="P/L NETO SIMULADO  "+money(pnl)+"     ·     CAPITAL "+money(snapshots.sumOf{it.balance})
+        summary.text="P/L NETO SIMULADO  "+money(pnl)+"     ·     CAPITAL "+money(snapshots.sumOf{it.equity})
     }
     private fun updateHomeTotals(snapshots:List<BotSnapshot>) {
         val pnl=snapshots.sumOf{it.pnl}
-        val capital=snapshots.sumOf{it.balance}
+        val capital=snapshots.sumOf{it.equity}
         homePnlText?.let { it.text=(if(pnl>=0) "+" else "")+money(pnl); it.setTextColor(if(pnl>=0)green else Color.rgb(255,64,75)) }
         homeCapitalText?.text="Capital total: "+money(capital)
         homePercentText?.let { it.text=String.format(Locale.US,"%+.2f%%",if(capital>0) pnl/capital*100.0 else 0.0); it.setTextColor(if(pnl>=0)green else Color.rgb(255,64,75)) }
@@ -97,7 +97,7 @@ class MainActivity : Activity() {
         sparklineViews.clear()
         when(page) {
             "Inicio" -> {
-                overviewCard(pnl, bots.sumOf{it.balance})
+                overviewCard(pnl, bots.sumOf{it.equity})
                 val best=bots.maxByOrNull{it.pnl}
                 bestCard(best?.symbol ?: "BTC-USDT", best?.pnl ?: 0.0)
                 val stats=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
@@ -147,7 +147,7 @@ class MainActivity : Activity() {
             }
             "Operaciones" -> {
                 panel("Operaciones abiertas","Posiciones abiertas     ·     Historial")
-                val open=bots.filter{it.position!="FLAT"}; cardBlock("Vista general","P/L: "+money(pnl)+"\nBalance: "+money(bots.sumOf{it.balance})+"\nPosiciones abiertas: "+open.size)
+                val open=bots.filter{it.position!="FLAT"}; cardBlock("Vista general","P/L: "+money(pnl)+"\nBalance: "+money(bots.sumOf{it.equity})+"\nPosiciones abiertas: "+open.size)
                 if(open.isEmpty())content.addView(text("No hay posiciones abiertas ahora mismo.",14f,muted,false))
                 open.forEach{cardBlock(it.symbol.replace("-","/"),it.position+"    "+money(it.pnl)+"\nEntrada: "+(if(it.entry>0)String.format(Locale.US,"%.5f",it.entry)else "—")+"\n"+it.status)}
             }
