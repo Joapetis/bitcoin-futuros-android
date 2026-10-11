@@ -3,9 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Simulador de futuros BTC</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<title>Simulador de futuros</title>
 <style>
 :root{
   --bg:#0b1623; --panel:#112032; --panel2:#0d1a29; --line:#213549; --text:#dbe6f1; --muted:#7f95ab;
@@ -13,12 +11,12 @@
   --font:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
 }
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.4;-webkit-text-size-adjust:100%}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.45;-webkit-text-size-adjust:100%;overscroll-behavior-y:contain} body{padding-bottom:env(safe-area-inset-bottom)}
 body{font-variant-numeric:tabular-nums}
 small{color:var(--muted);font-size:12px}
 button,input,select{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--blue);outline-offset:2px}
-.app{max-width:1520px;margin:0 auto;padding:12px;display:grid;gap:12px}
+.app{max-width:1520px;margin:0 auto;padding:calc(8px + env(safe-area-inset-top)) 8px calc(12px + env(safe-area-inset-bottom));display:grid;gap:10px}
 
 /* barra de aviso fija */
 .bar{position:sticky;top:0;z-index:20;padding:10px 14px;border-radius:10px;font-weight:600;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;color:#07131d;background:var(--amber)}
@@ -37,7 +35,7 @@ button,input,select{font:inherit;color:inherit}
 .meta b{font-weight:600}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px}
 .dot.ok{background:var(--up)} .dot.wait{background:var(--amber)} .dot.err{background:var(--down)}
-.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;width:100%}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.ctrl select{min-height:40px;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:7px 10px;max-width:100%}.ctrl .seg button{min-height:40px;padding:8px 13px}.btn{min-height:40px;padding:8px 12px;touch-action:manipulation}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .seg button{background:transparent;border:0;padding:6px 12px;cursor:pointer;color:var(--muted)}
 .seg button[aria-pressed="true"]{background:var(--line);color:var(--text)}
@@ -47,12 +45,12 @@ button,input,select{font:inherit;color:inherit}
 /* rejilla */
 .grid{display:grid;gap:12px;grid-template-columns:minmax(0,1fr) 390px;
   grid-template-areas:"chart op" "chart sig" "hist acc" "feed feed"}
-@media(max-width:1020px){.grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"op" "chart" "sig" "acc" "hist" "feed"}}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+@media(max-width:1020px){.grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"op" "chart" "sig" "acc" "hist" "feed"}.app{padding-left:8px;padding-right:8px}.top{gap:10px}.pxbox{width:100%;justify-content:space-between}.meta{gap:12px}.chart{min-height:430px}.plot{min-height:230px}.plot.rsi{min-height:96px}.card h2{font-size:15px}} @media(max-width:420px){#pxv{font-size:28px}.ctrl{gap:6px}.ctrl select{flex:1;min-width:0}.seg button{padding-left:10px!important;padding-right:10px!important}.plan{gap:8px 6px}.stats{gap:10px}.ring{width:138px;height:138px}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px;min-width:0;box-shadow:0 2px 8px rgba(0,0,0,.08)}
 .card h2{margin:0 0 10px;font-size:14px;font-weight:600}
 
 /* gráfico */
-.chart{grid-area:chart;display:flex;flex-direction:column;gap:8px;min-height:600px;padding:10px}
+.chart{grid-area:chart;display:flex;flex-direction:column;gap:8px;min-height:520px;padding:10px}
 @media(max-width:1020px){.chart{min-height:520px}}
 .chart-bar{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center}
 #ohlc{font-size:12.5px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap}
@@ -162,14 +160,15 @@ footer{color:var(--muted);font-size:12px;padding:2px 2px 14px;max-width:900px}
   <div class="bar" id="bar" hidden role="alert" aria-live="assertive"><span id="barTxt"></span><b id="barCd"></b></div>
 
   <header class="top">
-    <div class="brand"><b>Bitcoin futuros</b><small>Simulador con bot de confluencia</small></div>
-    <div class="pxbox"><span id="pxv">–</span><small>BTCUSDT perpetuo</small></div>
+    <div class="brand"><b>Futuros cripto</b><small>Bot de simulación · sin órdenes reales</small></div>
+    <div class="pxbox"><span id="pxv">–</span><small id="contractLabel">BTCUSDT · perpetuo</small></div>
     <div class="meta">
       <div><small>Funding</small><b id="fund">–</b></div>
       <div><small>Cierre de vela</small><b id="candleCd">–</b></div>
       <div><small>Fuente</small><b><i class="dot" id="dot"></i><span id="src">Conectando</span></b></div>
     </div>
     <div class="ctrl">
+      <label class="sr-only" for="sSymbol">Criptomoneda</label><select id="sSymbol" aria-label="Criptomoneda"><option value="BTCUSDT">BTC · Bitcoin</option><option value="ETHUSDT">ETH · Ethereum</option><option value="SOLUSDT">SOL · Solana</option><option value="XRPUSDT">XRP · Ripple</option><option value="DOGEUSDT">DOGE · Dogecoin</option><option value="BNBUSDT">BNB · BNB</option><option value="LINKUSDT">LINK · Chainlink</option><option value="ADAUSDT">ADA · Cardano</option><option value="AVAXUSDT">AVAX · Avalanche</option><option value="SUIUSDT">SUI · Sui</option></select>
       <div class="seg" id="tfSeg" role="group" aria-label="Temporalidad">
         <button data-tf="1m">1m</button><button data-tf="5m">5m</button><button data-tf="15m">15m</button><button data-tf="1h">1h</button>
       </div>
@@ -237,6 +236,7 @@ footer{color:var(--muted);font-size:12px;padding:2px 2px 14px;max-width:900px}
         <div class="set">
           <label>Aviso antes de operar <b id="vNotice"></b><input type="range" id="sNotice" min="10" max="60" step="5"></label>
           <label>Sensibilidad (umbral) <b id="vThr"></b><input type="range" id="sThr" min="10" max="80" step="1"></label>
+          <label>Apalancamiento simulado <select id="sLev"><option value="1">x1</option><option value="2">x2</option><option value="3">x3</option><option value="5">x5</option><option value="10">x10</option><option value="20">x20</option><option value="50">x50</option><option value="75">x75</option><option value="100">x100</option></select></label>
           <label>Riesgo por operación (%)<input type="number" id="sRisk" min="0.25" max="5" step="0.25"></label>
           <label>Distancia del stop<select id="sSl"><option value="1">1 ATR</option><option value="1.5">1.5 ATR</option><option value="2">2 ATR</option><option value="2.5">2.5 ATR</option></select></label>
           <button class="btn" id="resetBtn">Reiniciar simulación</button>
@@ -254,12 +254,12 @@ footer{color:var(--muted);font-size:12px;padding:2px 2px 14px;max-width:900px}
       <ul id="feed"></ul>
     </section>
   </main>
-  <footer>Simulación educativa con dinero ficticio. Perfil activo de simulación: capital inicial 100 USDT, apalancamiento teórico x100, umbral fijo 31 y riesgo por operación del 0,5%; el apalancamiento puede amplificar pérdidas rápidamente. Incluye comisiones y deslizamiento estimados, pero no replica perfectamente el mercado ni envía órdenes reales. No es asesoramiento financiero; no garantiza beneficios.</footer>
+  <footer>Simulación educativa con dinero ficticio. Capital inicial 100 USDT; el apalancamiento simulado se puede ajustar en Ajustes. Umbral 31 y riesgo por operación configurable; el apalancamiento puede amplificar pérdidas rápidamente. Incluye comisiones y deslizamiento estimados, pero no replica perfectamente el mercado ni envía órdenes reales. No es asesoramiento financiero; no garantiza beneficios.</footer>
 </div>
 <div id="toasts"></div>
 
 <script>
-// Bitcoin Futures Bot v5.1 — capital simulado 100 USDT, apalancamiento simulado x100 y umbral fijo 31 con conmutación automática con reversión a la media, umbral adaptativo, riesgo configurable y temporizador en Worker.
+// Crypto Futures Simulator v5.2 — simulación educativa multi-activo, apalancamiento configurable y temporizador en Worker.
 (()=>{
 'use strict';
 const $=id=>document.getElementById(id);
@@ -272,14 +272,15 @@ const mmss=ms=>{const s=Math.max(0,Math.ceil(ms/1000));return String(Math.floor(
 
 /* ---------- configuración y estado ---------- */
 const TFS={'1m':{s:60,bn:'1m',by:'1',ok:'candle1m'},'5m':{s:300,bn:'5m',by:'5',ok:'candle5m'},'15m':{s:900,bn:'15m',by:'15',ok:'candle15m'},'1h':{s:3600,bn:'1h',by:'60',ok:'candle1H'}};
-const FEE=0.0005, SLIP=0.0001, MAXLEV=100, START=100;
+const FEE=0.0005, SLIP=0.0001, START=100;
+const SYMBOLS={BTCUSDT:{base:"BTC",ok:"BTC-USDT-SWAP"},ETHUSDT:{base:"ETH",ok:"ETH-USDT-SWAP"},SOLUSDT:{base:"SOL",ok:"SOL-USDT-SWAP"},XRPUSDT:{base:"XRP",ok:"XRP-USDT-SWAP"},DOGEUSDT:{base:"DOGE",ok:"DOGE-USDT-SWAP"},BNBUSDT:{base:"BNB",ok:"BNB-USDT-SWAP"},LINKUSDT:{base:"LINK",ok:"LINK-USDT-SWAP"},ADAUSDT:{base:"ADA",ok:"ADA-USDT-SWAP"},AVAXUSDT:{base:"AVAX",ok:"AVAX-USDT-SWAP"},SUIUSDT:{base:"SUI",ok:"SUI-USDT-SWAP"}};
 const MIN_STOP=0.0018;   // distancia mínima del stop (0.18% del precio) en vez de bloquear si hay poca volatilidad
 const MIN_AGREE=2;       // perfil más activo: mínimo dos votos direccionales
-const DEF={tf:'5m',sound:true,notice:10,thr:31,risk:0.5,ver:4,slMult:1.5,ov:{ema:true,vwap:true,bb:false}};
+const DEF={tf:'5m',symbol:'BTCUSDT',lev:100,sound:true,notice:10,thr:31,risk:0.5,ver:5,slMult:1.5,ov:{ema:true,vwap:true,bb:false}};
 let S=JSON.parse(JSON.stringify(DEF));
 let B={balance:START,trades:[],pos:null};
 try{const raw=localStorage.getItem('btcbot.v1');if(raw){const o=JSON.parse(raw);const oldVer=Number((o.S||{}).ver)||0;S=Object.assign(S,o.S||{});S.ov=Object.assign({},DEF.ov,(o.S||{}).ov||{});B=Object.assign(B,o.B||{});if(oldVer<4){S.thr=31;S.risk=0.5;S.notice=10;S.ver=4;B={balance:START,trades:[],pos:null};} }}catch(e){}
-if(!TFS[S.tf])S.tf='5m';
+if(!TFS[S.tf])S.tf='5m';if(!SYMBOLS[S.symbol])S.symbol='BTCUSDT';S.lev=clamp(+S.lev||100,1,100);
 S.notice=clamp(Number(S.notice)||10,10,120);S.thr=clamp(Number(S.thr)||31,10,80);S.risk=clamp(Number(S.risk)||0.5,0.25,5);S.slMult=clamp(Number(S.slMult)||1.5,0.5,5);
 if(!Number.isFinite(B.balance)||B.balance<0)B.balance=START;if(!Array.isArray(B.trades))B.trades=[];if(!('pos' in B))B.pos=null;
 const save=()=>{try{localStorage.setItem('btcbot.v1',JSON.stringify({S,B}));}catch(e){}};
@@ -308,11 +309,11 @@ async function start(){
 async function loadSource(src,id){
   const tf=TFS[S.tf];let hist;
   if(src==='bybit'){
-    const j=await (await fetchT(`https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=${tf.by}&limit=500`)).json();
+    const j=await (await fetchT(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${S.symbol}&interval=${tf.by}&limit=500`)).json();
     if(j.retCode!==0||!j.result||!Array.isArray(j.result.list))throw new Error('respuesta inválida de Bybit');
     hist=j.result.list.map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]})).reverse();
   }else{
-    const j=await (await fetchT(`https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=${tf.ok}&limit=300`)).json();
+    const j=await (await fetchT(`https://www.okx.com/api/v5/market/candles?instId=${SYMBOLS[S.symbol].ok}&bar=${tf.ok}&limit=300`)).json();
     if(j.code!=='0'||!Array.isArray(j.data))throw new Error('respuesta inválida de OKX');
     hist=j.data.map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]})).reverse();
   }
@@ -328,9 +329,9 @@ function openWS(src,id){return new Promise((res,rej)=>{
   const to=setTimeout(()=>{if(!opened){try{w.close();}catch(e){}rej(new Error('timeout'));}},7000);
   w.onopen=()=>{
     opened=true;clearTimeout(to);ws=w;reconnectDelay=1500;lastWsMessageAt=Date.now();
-    if(src==='bybit'){w.send(JSON.stringify({op:'subscribe',args:[`kline.${tf.by}.BTCUSDT`,'tickers.BTCUSDT']}));
+    if(src==='bybit'){w.send(JSON.stringify({op:'subscribe',args:[`kline.${tf.by}.${S.symbol}`,`tickers.${S.symbol}`]}));
       const p=setInterval(()=>{if(w.readyState===1)w.send('{"op":"ping"}');else clearInterval(p);},20000);}
-    else if(src==='okx'){w.send(JSON.stringify({op:'subscribe',args:[{channel:tf.ok,instId:'BTC-USDT-SWAP'},{channel:'tickers',instId:'BTC-USDT-SWAP'}]}));}
+    else if(src==='okx'){w.send(JSON.stringify({op:'subscribe',args:[{channel:tf.ok,instId:SYMBOLS[S.symbol].ok},{channel:'tickers',instId:SYMBOLS[S.symbol].ok}]}));}
     setStatus(src==='bybit'?'Bybit Futures':'OKX Futures','ok');res();
   };
   w.onmessage=e=>{if(id!==conn)return;lastWsMessageAt=Date.now();try{onMsg(src,JSON.parse(e.data));}catch(x){}};
@@ -496,7 +497,7 @@ function sizing(pl){
   const riskBudget=B.balance*clamp(+S.risk||0.5,0.25,5)/100;
   // El riesgo incluye comisiones y deslizamiento de entrada y salida, para que un stop loss cueste ≈1 R reales.
   const perUnit=pl.stopDist+pl.entry*2*(FEE+SLIP);
-  const qRisk=riskBudget/perUnit,mq=B.balance*MAXLEV/pl.entry;
+  const qRisk=riskBudget/perUnit,mq=B.balance*S.lev/pl.entry;
   const q=Math.max(0,Math.min(qRisk,mq));
   return {qty:q,risk:q*perUnit,notional:q*pl.entry};
 }
@@ -581,7 +582,7 @@ function openPos(side,a,now){
   const entry=a.px*(1+side*SLIP),pl=plan(side,a,entry),sz=sizing(pl);
   if(!Number.isFinite(sz.qty)||sz.qty<=0||!Number.isFinite(sz.risk)||sz.risk<=0){alertUser('warn','Operación bloqueada','El tamaño calculado es cero o inválido. No se abre la operación.');cooldownUntil=now+30000;return;}
   B.pos={side,entry,qty:sz.qty,qty0:sz.qty,sl:pl.sl,tp1:pl.tp1,tp2:pl.tp2,tp1Hit:false,t:now,risk:sz.risk,best:entry,realized:-sz.qty*entry*FEE,lastSlAlert:now};
-  alertUser(side>0?'long':'short',`${sideWord(side)} ejecutada (simulada)`,`Entrada ${fmt(entry,1)}. Stop loss ${fmt(pl.sl,1)}, objetivo 1 ${fmt(pl.tp1,1)}, objetivo 2 ${fmt(pl.tp2,1)}. Tamaño ${fmt(sz.qty,4)} BTC.`,{say:`${side>0?'Compra':'Venta'} ejecutada. Stop loss en ${Math.round(pl.sl)}`,ttl:12000});
+  alertUser(side>0?'long':'short',`${sideWord(side)} ejecutada (simulada)`,`Entrada ${fmt(entry,1)}. Stop loss ${fmt(pl.sl,1)}, objetivo 1 ${fmt(pl.tp1,1)}, objetivo 2 ${fmt(pl.tp2,1)}. Tamaño ${fmt(sz.qty,4)} ${SYMBOLS[S.symbol].base}.`,{say:`${side>0?'Compra':'Venta'} ejecutada. Stop loss en ${Math.round(pl.sl)}`,ttl:12000});
   save();
 }
 function simulatedExitPrice(side,px){return px*(1-side*SLIP);}
@@ -631,7 +632,7 @@ function planLines(){
 function updateUI(now){
   const L=candles[candles.length-1];
   if(L){
-    const px=L.c;$('pxv').textContent=fmt(px,1);
+    const px=L.c;$('pxv').textContent=fmt(px,px<1?5:px<100?3:1);$('contractLabel').textContent=S.symbol+' · perpetuo';
     if(lastPx!=null&&px!==lastPx){$('pxv').className=px>lastPx?'up':'down';}
     lastPx=px;
     const tfms=TFS[S.tf].s*1000;$('candleCd').textContent=mmss((Math.floor(now/tfms)+1)*tfms-now);
@@ -685,8 +686,8 @@ function updateUI(now){
   }
   $('badge').textContent=badge;$('opMsg').textContent=msg;
   const barEl=$('bar');
-  if(bar){barEl.hidden=false;barEl.dataset.side=pend.type==='ENTER'?(pend.side>0?'long':'short'):'';$('barTxt').textContent=bar.t;$('barCd').textContent=bar.cd;document.title=`${bar.cd} ${pend.type==='ENTER'?sideWord(pend.side):'CERRAR'} - BTC`;}
-  else{barEl.hidden=true;document.title=L?`${fmt(L.c,1)} - Simulador BTC`:'Simulador de futuros BTC';}
+  if(bar){barEl.hidden=false;barEl.dataset.side=pend.type==='ENTER'?(pend.side>0?'long':'short'):'';$('barTxt').textContent=bar.t;$('barCd').textContent=bar.cd;document.title=`${bar.cd} ${pend.type==='ENTER'?sideWord(pend.side):'CERRAR'} - ${S.symbol}`;}
+  else{barEl.hidden=true;document.title=L?`${fmt(L.c,L.c<1?5:L.c<100?3:1)} - ${S.symbol}`:'Simulador de futuros';}
 
   if(a){
     $('score').textContent=(a.score>=0?'+':'')+a.score.toFixed(0);
@@ -716,7 +717,7 @@ function fillPlan(pl,sz,live){
   $('pEntry').textContent=fmt(pl.entry,1);$('pSL').textContent=fmt(pl.sl,1);
   $('pTP1').textContent=fmt(pl.tp1,1);$('pTP2').textContent=fmt(pl.tp2,1);
   $('lT1').textContent=live&&B.pos&&B.pos.tp1Hit?'Objetivo 1 (cumplido)':'Objetivo 1 (cierra 50%)';
-  $('pQty').textContent=fmt(sz.qty,4)+' BTC';$('pRisk').textContent=fmt(sz.risk)+' USDT';
+  $('pQty').textContent=fmt(sz.qty,4)+' '+SYMBOLS[S.symbol].base;$('pRisk').textContent=fmt(sz.risk)+' USDT';
 }
 function renderHist(){
   const tr=B.trades.slice(-30).reverse();
@@ -808,10 +809,12 @@ function bind(){
   document.addEventListener('pointerdown',initAudio,{once:true});
   [['ovEma','ema'],['ovVwap','vwap'],['ovBb','bb']].forEach(([id,k])=>{$(id).checked=S.ov[k];$(id).addEventListener('change',e=>{S.ov[k]=e.target.checked;save();drawAll();});});
   const nt=()=>{$('vNotice').textContent=S.notice+' s';$('vThr').textContent=S.thr;};
+  $('sSymbol').value=S.symbol;$('sLev').value=String(S.lev);$('sSymbol').addEventListener('change',e=>{const next=e.target.value;if(B.pos||pend){e.target.value=S.symbol;alertUser('warn','No se puede cambiar el contrato','Cierra la operación simulada actual y espera a que termine la señal pendiente.',{ttl:7000});return;}S.symbol=SYMBOLS[next]?next:'BTCUSDT';save();start();});
+  $('sLev').addEventListener('change',e=>{S.lev=clamp(+e.target.value||1,1,100);e.target.value=String(S.lev);save();});
   $('sNotice').value=S.notice;$('sThr').value=S.thr;$('sRisk').value=S.risk;$('sSl').value=String(S.slMult);nt();sync();
   $('sNotice').addEventListener('input',e=>{S.notice=Math.max(10,+e.target.value);nt();save();});
   $('sThr').addEventListener('input',e=>{S.thr=+e.target.value;nt();save();});
-  $('sRisk').addEventListener('change',e=>{S.risk=clamp(+e.target.value||2,0.25,5);e.target.value=S.risk;save();});
+  $('sRisk').addEventListener('change',e=>{S.risk=clamp(+e.target.value||0.5,0.25,5);e.target.value=S.risk;save();});
   $('sSl').addEventListener('change',e=>{S.slMult=+e.target.value;save();});
   $('resetBtn').addEventListener('click',()=>{if(!confirm('Se borrarán las operaciones y el capital simulado volverá a 100 USDT. ¿Continuar?'))return;B={balance:START,trades:[],pos:null};pend=null;feed=[];feedVer++;histVer++;cooldownUntil=0;save();});
   const plot=$('plot');
