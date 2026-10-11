@@ -120,6 +120,8 @@ object NativeTradingEngine {
     private fun processSymbol(symbol: String) {
         val candles = fetchCandles(symbol) ?: return
         if (candles.size < 60) return
+        // The 1H candle close is not a live quote. Fetch ticker separately so UI prices move intrabar.
+        val livePrice = fetchLivePrice(symbol)
         val closes = candles.map { it.optDouble(4) }
         val highs = candles.map { it.optDouble(2) }
         val lows = candles.map { it.optDouble(3) }
@@ -133,7 +135,7 @@ object NativeTradingEngine {
         val prevCandleTime = last.optLong(0)
         synchronized(lock) {
             val b = bots[symbol] ?: return
-            b.put("price", close)
+            b.put("price", livePrice?.takeIf { it > 0.0 } ?: close)
             val entry = b.optDouble("entry")
             val side = b.optString("side")
             val atr = atr(highs, lows, closes, 14)
@@ -371,6 +373,23 @@ object NativeTradingEngine {
         saveWeights(b, "mlpW1", w1)
         saveWeights(b, "mlpW2", w2)
         b.put("learned",b.optInt("learned")+1)
+    }
+
+    private fun fetchLivePrice(symbol: String): Double? {
+        val conn = URL("https://www.okx.com/api/v5/market/ticker?instId=$symbol").openConnection() as HttpURLConnection
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        conn.requestMethod = "GET"
+        return try {
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val root = JSONObject(body)
+            if (root.optString("code") != "0") return null
+            root.optJSONArray("data")?.optJSONObject(0)?.optString("last")?.toDoubleOrNull()
+        } catch (_: Exception) {
+            null
+        } finally {
+            conn.disconnect()
+        }
     }
 
     private fun fetchCandles(symbol: String): List<JSONArray>? {
