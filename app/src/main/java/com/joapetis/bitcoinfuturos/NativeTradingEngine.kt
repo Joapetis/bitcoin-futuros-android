@@ -14,6 +14,8 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
+data class CandleSnapshot(val time: Long, val open: Double, val high: Double, val low: Double, val close: Double, val volume: Double)
+
 data class BotSnapshot(
     val symbol: String, val balance: Double, val price: Double, val pnl: Double,
     val position: String, val entry: Double, val trades: Int, val wins: Int,
@@ -24,6 +26,7 @@ object NativeTradingEngine {
     private val symbols = listOf("BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT", "BNB-USDT", "LINK-USDT", "ADA-USDT", "AVAX-USDT", "SUI-USDT")
     private val lock = Any()
     private val bots = linkedMapOf<String, JSONObject>()
+    private val candleCache = linkedMapOf<String, List<CandleSnapshot>>()
     private lateinit var app: Context
     private var lastError = ""
     private var initialized = false
@@ -86,6 +89,7 @@ object NativeTradingEngine {
                 b.optInt("leverage",100), b.optDouble("risk",5.0), b.optInt("learned"))
         }
     }
+    fun candles(symbol: String): List<CandleSnapshot> = synchronized(lock) { candleCache[symbol]?.toList() ?: emptyList() }
     fun totalPnl() = snapshots().sumOf { it.pnl }
     fun lastError(): String = synchronized(lock) { lastError }
     fun storagePath(): String = synchronized(lock) { File(app.filesDir, "CryptoFutures").absolutePath }
@@ -105,6 +109,11 @@ object NativeTradingEngine {
         val closes = candles.map { it.optDouble(4) }
         val highs = candles.map { it.optDouble(2) }
         val lows = candles.map { it.optDouble(3) }
+        synchronized(lock) {
+            candleCache[symbol] = candles.takeLast(80).mapNotNull { row ->
+                if (row.length() < 6) null else CandleSnapshot(row.optLong(0), row.optDouble(1), row.optDouble(2), row.optDouble(3), row.optDouble(4), row.optDouble(5))
+            }
+        }
         val last = candles.last()
         val close = closes.last()
         val prevCandleTime = last.optLong(0)
