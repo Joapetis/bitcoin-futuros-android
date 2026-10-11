@@ -52,7 +52,7 @@ class MainActivity : Activity() {
         root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setBackgroundColor(bg)}
         val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(18),dp(12),dp(18),dp(8))}
         val brand=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
-        brand.addView(text("🔷  Crypto Futures",20f,Color.WHITE,true)); brand.addView(text("       Simulador de Futuros · v0.3",11f,muted,false))
+        brand.addView(text("🔷  Crypto Futures",20f,Color.WHITE,true)); brand.addView(text("       Simulador de Futuros · v0.4",11f,muted,false))
         header.addView(brand,LinearLayout.LayoutParams(0,-2,1f)); header.addView(text("♧  ◉",20f,Color.WHITE,true)); root.addView(header)
         summary=text("",11f,green,true).apply{setPadding(dp(12),dp(2),dp(12),dp(8));maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END}; root.addView(summary)
         val scroll=ScrollView(this).apply{isFillViewport=true;clipToPadding=false}
@@ -77,7 +77,7 @@ class MainActivity : Activity() {
     private fun updateSummary() {
         if(!::summary.isInitialized)return
         val pnl=NativeTradingEngine.snapshots().sumOf{it.pnl}
-        summary.text="P/L SIMULADO  "+money(pnl)+"     ·     CAPITAL "+money(1000.0+pnl)
+        summary.text="P/L NETO SIMULADO  "+money(pnl)+"     ·     CAPITAL "+money(NativeTradingEngine.snapshots().sumOf{it.balance})
     }
     private fun updateScreen() {
         if(!::content.isInitialized)return
@@ -88,7 +88,7 @@ class MainActivity : Activity() {
         sparklineViews.clear()
         when(page) {
             "Inicio" -> {
-                overviewCard(pnl, 1000.0 + pnl)
+                overviewCard(pnl, bots.sumOf{it.balance})
                 val best=bots.maxByOrNull{it.pnl}
                 bestCard(best?.symbol ?: "BTC-USDT", best?.pnl ?: 0.0)
                 val stats=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
@@ -143,9 +143,40 @@ class MainActivity : Activity() {
                 open.forEach{cardBlock(it.symbol.replace("-","/"),it.position+"    "+money(it.pnl)+"\nEntrada: "+(if(it.entry>0)String.format(Locale.US,"%.5f",it.entry)else "—")+"\n"+it.status)}
             }
             "Historial" -> {
-                panel("Historial","Operaciones simuladas y aprendizaje")
-                bots.forEach{cardBlock(it.symbol+" · "+NativeTradingEngine.strategyName(it.symbol),it.trades.toString()+" cierres · "+it.wins+" aciertos\nBalance "+money(it.balance)+" · P/L "+money(it.pnl)+" · Aprendizaje "+it.learned)}
-                content.addView(text("Datos guardados en: "+NativeTradingEngine.storagePath(),10f,muted,false)); content.addView(text(NativeTradingEngine.lastError(),12f,Color.YELLOW,false))
+                panel("Historial detallado","Resultados por bot y cada operación cerrada")
+                bots.forEach { bot ->
+                    val history=NativeTradingEngine.tradeHistory(bot.symbol)
+                    val trades=history.filter{it.optString("type","TRADE")=="TRADE"}
+                    val wins=trades.count{it.optDouble("pnl")>0}
+                    val losses=trades.count{it.optDouble("pnl")<=0}
+                    cardBlock(bot.symbol+" · "+NativeTradingEngine.strategyName(bot.symbol),
+                        bot.trades.toString()+" cierres · "+wins+" ganancias · "+losses+" pérdidas\nBalance "+money(bot.balance)+" · P/L neto "+money(bot.pnl)+"\nAprendizaje "+bot.learned+" muestras · Recargas "+history.count{it.optString("type")=="RECHARGE"})
+                }
+                val all=NativeTradingEngine.tradeHistory().take(150)
+                panel("Últimas operaciones","Se muestran las 150 más recientes; el registro completo se conserva")
+                if(all.isEmpty()) content.addView(text("Todavía no hay operaciones cerradas.",13f,muted,false))
+                all.forEach { item ->
+                    val recharge=item.optString("type")=="RECHARGE"
+                    val profit=item.optDouble("pnl",0.0)
+                    val sym=item.optString("symbol")
+                    val time=java.text.SimpleDateFormat("dd/MM HH:mm:ss",Locale.getDefault()).format(java.util.Date(item.optLong("time")))
+                    val title=if(recharge) "$sym · RECARGA "+money(item.optDouble("amount")) else "$sym · "+item.optString("side")+" · "+(if(profit>=0)"+" else "")+money(profit)
+                    val details=if(recharge) time+"\n"+item.optString("reason")+"\nSaldo tras recarga: "+money(item.optDouble("balanceAfter"))
+                    else time+" · "+item.optString("strategy")+" · "+item.optString("timeframe")+"\nEntrada: "+String.format(Locale.US,"%.6f",item.optDouble("entry"))+" → Salida: "+String.format(Locale.US,"%.6f",item.optDouble("exit"))+
+                        "\nCantidad: "+String.format(Locale.US,"%.6f",item.optDouble("qty"))+" · Nocional: "+money(item.optDouble("entryNotional"))+
+                        "\nBruto: "+money(item.optDouble("gross"))+" · Comisiones: "+money(item.optDouble("fees"))+" · Financiación: "+money(item.optDouble("funding"))+
+                        "\nStop: "+String.format(Locale.US,"%.6f",item.optDouble("stop"))+" · Objetivo: "+String.format(Locale.US,"%.6f",item.optDouble("target"))+
+                        "\nCierre: "+item.optString("reason")+" · Duración: "+(item.optLong("durationMs")/60000)+" min"+
+                        "\nSaldo: "+money(item.optDouble("balanceBefore"))+" → "+money(item.optDouble("balanceAfter"))+
+                        "\nApalancamiento: x"+item.optInt("leverage")+" · Riesgo: "+item.optDouble("riskPercent")+"% · Probabilidad estimada: "+(item.optDouble("predictedWin")*100).toInt()+"%"+
+                        "\nModelo: "+item.optInt("modelSamples")+" muestras"
+                    val row=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(10),dp(10),dp(10),dp(10));setBackgroundColor(card)}
+                    row.addView(text(title,13f,if(recharge)blue else if(profit>=0)green else Color.rgb(255,77,90),true))
+                    row.addView(text(details,11f,muted,false))
+                    content.addView(row,LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,dp(3),0,dp(3))})
+                }
+                content.addView(text("Datos guardados en: "+NativeTradingEngine.storagePath(),10f,muted,false))
+                content.addView(text(NativeTradingEngine.lastError(),12f,Color.YELLOW,false))
             }
             "Ajustes" -> {
                 panel("Ajustes","Configuración de la aplicación")
@@ -201,7 +232,8 @@ class MainActivity : Activity() {
     }
     private fun controls(symbol:String,risk:Double,leverage:Int){
         cardBlock("Riesgo por operación",risk.toInt().toString()+"% del balance como riesgo teórico")
-        val bar=SeekBar(this).apply{max=20;progress=risk.toInt().coerceIn(1,20)}; content.addView(bar)
+        val bar=SeekBar(this).apply{max=100;progress=risk.toInt().coerceIn(1,100)}; content.addView(bar)
+        content.addView(text("100% = riesgo teórico de todo el saldo en el stop; el capital simulado puede perderse.",10f,muted,false))
         bar.setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{override fun onProgressChanged(s:SeekBar?,p:Int,u:Boolean){if(u)NativeTradingEngine.setRisk(symbol,p.coerceAtLeast(1).toDouble())};override fun onStartTrackingTouch(s:SeekBar?){};override fun onStopTrackingTouch(s:SeekBar?){}})
         content.addView(text("Apalancamiento simulado",13f,Color.WHITE,true)); val levs=listOf(1,2,3,5,10,20,50,75,100); val sp=Spinner(this)
         sp.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,levs.map{"x"+it});sp.setSelection(levs.indexOf(leverage).coerceAtLeast(0))
