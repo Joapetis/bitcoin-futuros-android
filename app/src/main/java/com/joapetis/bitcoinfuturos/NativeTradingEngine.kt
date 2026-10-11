@@ -24,8 +24,8 @@ data class BotSnapshot(
 
 object NativeTradingEngine {
     // Conservative assumptions for a simulated taker order; verify the account's actual fee tier.
-    private const val TAKER_FEE_RATE = 0.0005       // Binance USDⓈ-M Futures standard VIP 0 taker fee: 0.05% per side
-    private const val MAKER_FEE_RATE = 0.0002       // Binance USDⓈ-M Futures standard VIP 0 maker fee: 0.02% per side (not used for market fills)
+    private const val TAKER_FEE_RATE = 0.0005       // conservative simulated taker fee assumption: 0.05% per side
+    private const val MAKER_FEE_RATE = 0.0002       // reference assumption only; simulated fills use taker fees
     private const val SLIPPAGE_RATE = 0.0002        // modelled adverse fill, not a Binance commission
     private const val FUNDING_RATE_PER_8H = 0.0001  // assumed 0.01% per 8h; actual funding varies
     private const val MIN_REWARD_TO_COST = 2.0
@@ -37,6 +37,8 @@ object NativeTradingEngine {
     private val lock = Any()
     private val bots = linkedMapOf<String, JSONObject>()
     private val candleCache = linkedMapOf<String, List<CandleSnapshot>>()
+    private val chartCandleCache = linkedMapOf<String, List<CandleSnapshot>>()
+    private val chartExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private lateinit var app: Context
     private var lastError = ""
     private var initialized = false
@@ -100,6 +102,29 @@ object NativeTradingEngine {
         }
     }
     fun candles(symbol: String): List<CandleSnapshot> = synchronized(lock) { candleCache[symbol]?.toList() ?: emptyList() }
+
+    // Chart intervals are display-only: separate cache from bot strategy candles.
+    fun chartCandles(symbol: String, bar: String): List<CandleSnapshot> = synchronized(lock) {
+        chartCandleCache["$symbol|$bar"]?.toList() ?: emptyList()
+    }
+
+    fun requestChartCandles(symbol: String, bar: String, onLoaded: () -> Unit) {
+        val supported = setOf("1m", "5m", "15m", "1H", "4H", "1D")
+        if (bar !in supported) return
+        chartExecutor.execute {
+            val rows = fetchCandles(symbol, bar)
+            if (rows != null) {
+                val parsed = rows.mapNotNull { row ->
+                    if (row.length() < 6) null else CandleSnapshot(
+                        row.optLong(0), row.optDouble(1), row.optDouble(2),
+                        row.optDouble(3), row.optDouble(4), row.optDouble(5)
+                    )
+                }
+                synchronized(lock) { chartCandleCache["$symbol|$bar"] = parsed.takeLast(220) }
+            }
+            try { onLoaded() } catch (_: Exception) {}
+        }
+    }
     fun marketChange24h(symbol: String): Double = synchronized(lock) {
         val c = candleCache[symbol] ?: return@synchronized 0.0
         if (c.size < 25 || c[c.size-25].close == 0.0) 0.0 else (c.last().close / c[c.size-25].close - 1.0) * 100.0
@@ -396,8 +421,8 @@ object NativeTradingEngine {
         }
     }
 
-    private fun fetchCandles(symbol: String): List<JSONArray>? {
-        val url = URL("https://www.okx.com/api/v5/market/candles?instId=$symbol&bar=1H&limit=220")
+    private fun fetchCandles(symbol: String, bar: String = "1H"): List<JSONArray>? {
+        val url = URL("https://www.okx.com/api/v5/market/candles?instId=$symbol&bar=$bar&limit=220")
         val conn = (url.openConnection() as HttpURLConnection)
         conn.connectTimeout=7000; conn.readTimeout=7000; conn.requestMethod="GET"
         return try {
