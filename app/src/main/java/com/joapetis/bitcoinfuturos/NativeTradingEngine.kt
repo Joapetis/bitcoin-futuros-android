@@ -181,6 +181,11 @@ object NativeTradingEngine {
             b.put("lastSignal", "$strategy · $regime · RSI ${rsi.toInt()} · Señal $signal")
             val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
             if (newCandle) b.put("lastCandle", prevCandleTime)
+            val adaptiveBar = chooseBotTimeframe(closes, highs, lows, ema9, ema21, ema50, ema200, atr, close)
+            if (adaptiveBar != chosenBar) {
+                b.put("botBar", adaptiveBar).put("lastCandle", 0L)
+                b.put("lastSignal", strategy + " · temporalidad adaptativa " + chosenBar + " → " + adaptiveBar)
+            }
             if (side != "FLAT" && entry > 0) {
                 val stop = b.optDouble("stop")
                 val target = b.optDouble("target")
@@ -233,6 +238,25 @@ object NativeTradingEngine {
                     b.put("lastSignal", "$strategy · Entrada filtrada por costes/IA (${(predictedWin*100).toInt()}%)")
                 }
             }
+        }
+    }
+
+    private fun chooseBotTimeframe(
+        closes: List<Double>, highs: List<Double>, lows: List<Double>,
+        ema9: Double, ema21: Double, ema50: Double, ema200: Double,
+        atr: Double, close: Double
+    ): String {
+        if (closes.size < 80 || close <= 0.0) return "1H"
+        val atrPct = atr / close
+        val trendStrength = abs(ema9 - ema21) / close
+        val longTrend = abs(ema50 - ema200) / close
+        val lastReturns = if (closes.size > 12 && closes[closes.lastIndex - 12] > 0.0)
+            abs(close / closes[closes.lastIndex - 12] - 1.0) else 0.0
+        return when {
+            atrPct >= 0.012 || lastReturns >= 0.035 -> "15m"
+            longTrend >= 0.012 && trendStrength >= 0.003 -> "4H"
+            atrPct < 0.0025 && trendStrength < 0.001 -> "4H"
+            else -> "1H"
         }
     }
 
