@@ -206,6 +206,11 @@ class MainActivity : Activity() {
                     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                     startActivityForResult(intent,backupPicker)
                 }
+                actionButton("Restaurar bots desde esta carpeta") {
+                    val message=NativeTradingEngine.restoreUserBackup()
+                    Toast.makeText(this,message,Toast.LENGTH_LONG).show()
+                    updateScreen()
+                }
                 cardBlock("Importante","El respaldo se actualiza automáticamente. Antes de desinstalar, confirma que state-v1.json existe en la carpeta elegida. Para actualizar, instala el APK encima sin desinstalar; si Android indica conflicto de firma, el respaldo protege los datos, pero no corrige la firma del APK.")
                 cardBlock("Continuidad","Android puede limitar procesos en segundo plano. Revisa la optimización de batería para mejorar la continuidad.")
             }
