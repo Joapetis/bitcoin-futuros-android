@@ -21,7 +21,7 @@ footer{flex-shrink:0;padding:5px 10px;background:var(--panel);border-top:1px sol
 const assets=[['BTCUSDT','BTC'],['ETHUSDT','ETH'],['SOLUSDT','SOL'],['XRPUSDT','XRP'],['DOGEUSDT','DOGE'],['BNBUSDT','BNB'],['LINKUSDT','LINK'],['ADAUSDT','ADA'],['AVAXUSDT','AVAX'],['SUIUSDT','SUI']];
 const nav=document.getElementById('tabs'),space=document.getElementById('workspace');let active='BTCUSDT';
 assets.forEach(([symbol,label],i)=>{const b=document.createElement('button');b.type='button';b.role='tab';b.textContent=label;b.setAttribute('aria-selected',String(i===0));b.addEventListener('click',()=>select(symbol));nav.appendChild(b);
-const f=document.createElement('iframe');f.title='Bot '+label;f.loading=i===0?'eager':'lazy';f.dataset.symbol=symbol;f.src='bot.html?symbol='+encodeURIComponent(symbol);if(i===0)f.classList.add('active');space.appendChild(f);});
+const f=document.createElement('iframe');f.title='Bot '+label;f.loading='eager';f.dataset.symbol=symbol;f.src='bot.html?symbol='+encodeURIComponent(symbol);if(i===0)f.classList.add('active');space.appendChild(f);});
 function select(symbol){active=symbol;[...nav.children].forEach((b,i)=>b.setAttribute('aria-selected',String(assets[i][0]===symbol)));[...space.children].forEach(f=>f.classList.toggle('active',f.dataset.symbol===symbol));const b=[...nav.children].find((x,i)=>assets[i][0]===symbol);if(b)b.scrollIntoView({block:'nearest',inline:'center',behavior:'smooth'});}
 })();
 </script></body></html>
