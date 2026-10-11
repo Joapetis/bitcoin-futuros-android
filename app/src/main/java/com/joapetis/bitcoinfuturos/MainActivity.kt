@@ -55,7 +55,15 @@ class MainActivity : Activity() {
             item.addView(text(when(name){"Inicio"->"⌂";"Mercados"->"▥";"Operaciones"->"▣";"Historial"->"◷";else->"⚙"},20f,if(page==name)blue else muted,true))
             item.addView(text(name,9f,if(page==name)blue else muted,false)); nav.addView(item,LinearLayout.LayoutParams(0,-2,1f))
         }
-        root.addView(nav); setContentView(root); updateScreen()
+        root.addView(nav)
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            view.setPadding(0, insets.systemWindowInsetTop, 0, 0)
+            nav.setPadding(dp(4), dp(5), dp(4), insets.systemWindowInsetBottom + dp(5))
+            insets
+        }
+        setContentView(root)
+        root.requestApplyInsets()
+        updateScreen()
     }
     private fun updateSummary() {
         if(!::summary.isInitialized)return
