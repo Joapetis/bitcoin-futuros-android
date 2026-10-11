@@ -118,10 +118,13 @@ object NativeTradingEngine {
     }
 
     private fun processSymbol(symbol: String) {
+        // Price updates are independent from strategy candles: a candle request must never freeze the quote.
+        val livePrice = fetchLivePrice(symbol)
+        if (livePrice != null && livePrice > 0.0) {
+            synchronized(lock) { bots[symbol]?.put("price", livePrice) }
+        }
         val candles = fetchCandles(symbol) ?: return
         if (candles.size < 60) return
-        // The 1H candle close is not a live quote. Fetch ticker separately so UI prices move intrabar.
-        val livePrice = fetchLivePrice(symbol)
         val closes = candles.map { it.optDouble(4) }
         val highs = candles.map { it.optDouble(2) }
         val lows = candles.map { it.optDouble(3) }
@@ -135,7 +138,8 @@ object NativeTradingEngine {
         val prevCandleTime = last.optLong(0)
         synchronized(lock) {
             val b = bots[symbol] ?: return
-            b.put("price", livePrice?.takeIf { it > 0.0 } ?: close)
+            // Keep the last valid live ticker; only use candle close before the first ticker succeeds.
+            if (b.optDouble("price", 0.0) <= 0.0) b.put("price", close)
             val entry = b.optDouble("entry")
             val side = b.optString("side")
             val atr = atr(highs, lows, closes, 14)
