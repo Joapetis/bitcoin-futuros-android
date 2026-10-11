@@ -26,6 +26,7 @@ class MainActivity : Activity() {
     private lateinit var root:LinearLayout; private lateinit var content:LinearLayout; private lateinit var summary:TextView
     private var page="Inicio"; private var selected="BTC-USDT"
     private val symbols=listOf("BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","DOGE-USDT","BNB-USDT","LINK-USDT","ADA-USDT","AVAX-USDT","SUI-USDT")
+    private fun dp(value:Int):Int = (value * resources.displayMetrics.density + 0.5f).toInt()
     private fun money(v:Double)=String.format(Locale.US,"%,.2f USDT",v)
 
     override fun onCreate(savedInstanceState:Bundle?) {
@@ -36,30 +37,35 @@ class MainActivity : Activity() {
         if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.O) startForegroundService(service) else startService(service)
         render(); handler.post(refreshRunnable)
     }
-    private val refreshRunnable=object:Runnable { override fun run(){ if(::root.isInitialized) updateScreen(); handler.postDelayed(this,4000) } }
+    private val refreshRunnable=object:Runnable { override fun run(){ if(::root.isInitialized) updateSummary(); handler.postDelayed(this,4000) } }
 
     private fun render() {
         root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setBackgroundColor(bg)}
-        val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(18,12,18,8)}
+        val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(18),dp(12),dp(18),dp(8))}
         val brand=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
         brand.addView(text("🔷  Crypto Futures",20f,Color.WHITE,true)); brand.addView(text("       Simulador de Futuros",11f,muted,false))
         header.addView(brand,LinearLayout.LayoutParams(0,-2,1f)); header.addView(text("♧  ◉",20f,Color.WHITE,true)); root.addView(header)
-        summary=text("",11f,green,true).apply{setPadding(18,2,18,8)}; root.addView(summary)
+        summary=text("",11f,green,true).apply{setPadding(dp(12),dp(2),dp(12),dp(8));maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END}; root.addView(summary)
         val scroll=ScrollView(this).apply{isFillViewport=true;clipToPadding=false}
-        content=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(14,6,14,14)}; scroll.addView(content)
+        content=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(6),dp(14),dp(14))}; scroll.addView(content)
         root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
-        val nav=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;setPadding(4,5,4,5);setBackgroundColor(Color.rgb(7,14,23))}
+        val nav=LinearLayout(this).apply{tag="bottom_navigation";orientation=LinearLayout.HORIZONTAL;setPadding(dp(4),dp(5),dp(4),dp(5));setBackgroundColor(Color.rgb(7,14,23))}
         listOf("Inicio","Mercados","Operaciones","Historial","Ajustes").forEach { name ->
-            val item=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(1,5,1,3);setOnClickListener{page=name;render()}}
+            val item=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(dp(1),dp(5),dp(1),dp(3));setOnClickListener{page=name;render()}}
             item.addView(text(when(name){"Inicio"->"⌂";"Mercados"->"▥";"Operaciones"->"▣";"Historial"->"◷";else->"⚙"},20f,if(page==name)blue else muted,true))
             item.addView(text(name,9f,if(page==name)blue else muted,false)); nav.addView(item,LinearLayout.LayoutParams(0,-2,1f))
         }
         root.addView(nav); setContentView(root); updateScreen()
     }
+    private fun updateSummary() {
+        if(!::summary.isInitialized)return
+        val pnl=NativeTradingEngine.snapshots().sumOf{it.pnl}
+        summary.text="P/L SIMULADO  "+money(pnl)+"     ·     CAPITAL "+money(1000.0+pnl)
+    }
     private fun updateScreen() {
         if(!::content.isInitialized)return
         val bots=NativeTradingEngine.snapshots(); val pnl=bots.sumOf{it.pnl}
-        summary.text="P/L SIMULADO  "+money(pnl)+"     ·     CAPITAL "+money(1000.0+pnl)
+        updateSummary()
         content.removeAllViews()
         when(page) {
             "Inicio" -> {
@@ -69,14 +75,14 @@ class MainActivity : Activity() {
                 val stats=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
                 listOf(bots.size.toString()+"|Bots activos",bots.count{it.pnl>0}.toString()+"|Ganadores",bots.count{it.pnl<0}.toString()+"|Perdedores").forEachIndexed{i,s->
                     val parts=s.split("|"); val c=if(i==1)green else if(i==2)Color.RED else Color.WHITE
-                    val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(5,9,5,9);setBackgroundColor(card);addView(text(parts[0],19f,c,true));addView(text(parts[1],10f,muted,false))}
-                    stats.addView(box,LinearLayout.LayoutParams(0,-2,1f).apply{setMargins(3,4,3,4)})
+                    val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(dp(5),dp(9),dp(5),dp(9));setBackgroundColor(card);addView(text(parts[0],19f,c,true));addView(text(parts[1],10f,muted,false))}
+                    stats.addView(box,LinearLayout.LayoutParams(0,-2,1f).apply{setMargins(dp(3),dp(4),dp(3),dp(4))})
                 }; content.addView(stats); panel("Mercados","Toca una criptomoneda para abrir su ficha")
                 bots.take(5).forEach{marketRow(it)}; actionButton("Ver todos los mercados"){page="Mercados";render()}
             }
             "Mercados" -> {
                 panel("Mercados","Todo     Futuros     Top     DeFi     Memes")
-                val search=EditText(this).apply{hint="Buscar criptomoneda…";setHintTextColor(muted);setTextColor(Color.WHITE);textSize=14f;setSingleLine();setPadding(14,8,14,8);setBackgroundColor(card)}
+                val search=EditText(this).apply{hint="Buscar criptomoneda…";setHintTextColor(muted);setTextColor(Color.WHITE);textSize=14f;setSingleLine();setPadding(dp(14),dp(8),dp(14),dp(8));setBackgroundColor(card)}
                 content.addView(search); val list=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}; content.addView(list)
                 fun fill(q:String){list.removeAllViews();bots.filter{it.symbol.contains(q,true)}.forEach{marketRow(it,list)}}
                 fill(""); search.addTextChangedListener(object:android.text.TextWatcher{override fun beforeTextChanged(s:CharSequence?,st:Int,c:Int,a:Int){};override fun onTextChanged(s:CharSequence?,st:Int,b:Int,c:Int){fill(s.toString())};override fun afterTextChanged(s:android.text.Editable?){}})
@@ -114,9 +120,9 @@ class MainActivity : Activity() {
         }
     }
     private fun marketRow(b:BotSnapshot,parent:LinearLayout=content){
-        val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(8,10,8,10);setBackgroundColor(bg);setOnClickListener{selected=b.symbol;page="Detalle";render()}}
+        val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(8),dp(10),dp(8),dp(10));setBackgroundColor(bg);setOnClickListener{selected=b.symbol;page="Detalle";render()}}
         row.addView(text(when(b.symbol){"BTC-USDT"->"₿";"ETH-USDT"->"◆";"SOL-USDT"->"≋";"XRP-USDT"->"✕";"DOGE-USDT"->"Ð";else->"●"},24f,when(b.symbol){"BTC-USDT"->Color.rgb(255,159,28);"ETH-USDT"->Color.rgb(99,126,234);"SOL-USDT"->Color.MAGENTA;else->blue},true))
-        val names=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(10,0,0,0)}
+        val names=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(10),0,0,0)}
         names.addView(text(b.symbol.substringBefore("-"),14f,Color.WHITE,true)); names.addView(text(when(b.symbol){"BTC-USDT"->"Bitcoin";"ETH-USDT"->"Ethereum";"SOL-USDT"->"Solana";"DOGE-USDT"->"Dogecoin";else->b.symbol.substringBefore("-")},10f,muted,false))
         row.addView(names,LinearLayout.LayoutParams(0,-2,1f)); row.addView(text(if(b.price>0)String.format(Locale.US,"%,.4f",b.price)else "—",12f,Color.WHITE,false))
         row.addView(text(String.format(Locale.US,"%+.2f%%",b.pnl),11f,if(b.pnl>=0)green else Color.RED,true)); parent.addView(row)
@@ -137,11 +143,11 @@ class MainActivity : Activity() {
             p.color=Color.rgb(28,96,190);p.style=Paint.Style.STROKE;p.strokeWidth=2f;val path=Path()
             for(i in 0..100){val x=w*i/100;val y=h*(0.5f+0.23f*sin(i*0.17).toFloat()+0.09f*sin(i*0.49).toFloat());if(i==0)path.moveTo(x,y)else path.lineTo(x,y)};c.drawPath(path,p);p.style=Paint.Style.FILL
             p.color=green;for(i in 0..27){val x=w*i/27;val y=h*(0.72f-0.48f*i/27+0.08f*sin(i*1.4).toFloat());c.drawLine(x,y-7,x,y+8,p);c.drawRect(x-2,y-5,x+2,y+5,p)}
-        }};v.layoutParams=LinearLayout.LayoutParams(-1,210);content.addView(v);content.addView(text("1H       4H       1D                         RSI / ATR",11f,muted,false))
+        }};v.layoutParams=LinearLayout.LayoutParams(-1,dp(210));content.addView(v);content.addView(text("1H       4H       1D                         RSI / ATR",11f,muted,false))
     }
-    private fun cardBlock(title:String,body:String){val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(14,10,14,10);setBackgroundColor(card);addView(text(title,14f,Color.WHITE,true));addView(text(body,12f,muted,false))};content.addView(box,LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,5,0,5)})}
-    private fun panel(title:String,subtitle:String){content.addView(text(title,21f,Color.WHITE,true));content.addView(text(subtitle,11f,muted,false));content.addView(View(this),LinearLayout.LayoutParams(1,7))}
+    private fun cardBlock(title:String,body:String){val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(10),dp(14),dp(10));setBackgroundColor(card);addView(text(title,14f,Color.WHITE,true));addView(text(body,12f,muted,false))};content.addView(box,LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,dp(5),0,dp(5))})}
+    private fun panel(title:String,subtitle:String){content.addView(text(title,21f,Color.WHITE,true));content.addView(text(subtitle,11f,muted,false));content.addView(View(this),LinearLayout.LayoutParams(1,dp(7)))}
     private fun actionButton(label:String,action:()->Unit){content.addView(Button(this).apply{text=label;isAllCaps=false;textSize=13f;setTextColor(Color.WHITE);setBackgroundColor(blue);setOnClickListener{action()}},LinearLayout.LayoutParams(-1,-2))}
-    private fun text(value:String,size:Float,color:Int,bold:Boolean)=TextView(this).apply{text=value;textSize=size;setTextColor(color);if(bold)setTypeface(typeface,Typeface.BOLD);setPadding(0,4,0,4)}
+    private fun text(value:String,size:Float,color:Int,bold:Boolean)=TextView(this).apply{text=value;textSize=size;setTextColor(color);if(bold)setTypeface(typeface,Typeface.BOLD);setPadding(0,dp(4),0,dp(4))}
     override fun onDestroy(){handler.removeCallbacks(refreshRunnable);super.onDestroy()}
 }
