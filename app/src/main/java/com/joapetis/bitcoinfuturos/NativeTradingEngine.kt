@@ -120,7 +120,7 @@ object NativeTradingEngine {
             val returns = if (closes.size > 12 && closes[closes.size-12] != 0.0) close / closes[closes.size-12] - 1.0 else 0.0
             val trend = ((ema9-ema21)/close*100.0).coerceIn(-3.0,3.0)
             val regime = if (abs(ema50-ema200)/close > 0.004) "TENDENCIA" else "RANGO"
-            val nn = b.optDouble("nnBias") + b.optDouble("nnTrend")*trend + b.optDouble("nnMomentum")*(returns*100)
+            val nn = (b.optDouble("nnBias") + b.optDouble("nnTrend")*(trend/3.0).coerceIn(-1.0,1.0) + b.optDouble("nnMomentum")*((returns*100)/5.0).coerceIn(-1.0,1.0)).coerceIn(-1.0,1.0)
             val trendScore = (if (ema9 > ema21) 1 else -1) + (if (ema50 > ema200) 1 else -1)
             val momentumScore = when { returns > 0.004 && rsi in 48.0..72.0 -> 1; returns < -0.004 && rsi in 28.0..52.0 -> -1; else -> 0 }
             val meanReversion = if (regime == "RANGO") when { rsi < 28 -> 1; rsi > 72 -> -1; else -> 0 } else 0
