@@ -145,8 +145,10 @@ object NativeTradingEngine {
                 val target = b.optDouble("target")
                 val candleHigh = highs.last()
                 val candleLow = lows.last()
-                val stopHit = if (side == "LONG") candleLow <= stop else candleHigh >= stop
-                val targetHit = if (side == "LONG") candleHigh >= target else candleLow <= target
+                // Ignore the pre-entry part of this hourly candle to avoid look-ahead exits.
+                val afterEntryCandle = prevCandleTime > b.optLong("entryCandle", prevCandleTime)
+                val stopHit = afterEntryCandle && (if (side == "LONG") candleLow <= stop else candleHigh >= stop)
+                val targetHit = afterEntryCandle && (if (side == "LONG") candleHigh >= target else candleLow <= target)
                 if (stopHit || targetHit || (newCandle && signal != "FLAT" && signal != side)) {
                     val exitPrice = if (stopHit) stop else if (targetHit) target else close
                     val gross = (if (side == "LONG") exitPrice-entry else entry-exitPrice) * b.optDouble("qty")
@@ -168,7 +170,7 @@ object NativeTradingEngine {
                 if (qty > 0 && qty.isFinite()) {
                     val stop = if(signal=="LONG") close-stopDistance else close+stopDistance
                     val target = if(signal=="LONG") close+atr*2.7 else close-atr*2.7
-                    b.put("side",signal).put("entry",close).put("qty",qty).put("stop",stop).put("target",target).put("lastEntryCandle",prevCandleTime)
+                    b.put("side",signal).put("entry",close).put("qty",qty).put("stop",stop).put("target",target).put("lastEntryCandle",prevCandleTime).put("entryCandle",prevCandleTime)
                 }
             }
         }
