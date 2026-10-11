@@ -126,7 +126,9 @@ class MainActivity : Activity() {
                 val spinner=Spinner(this); spinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,symbols); spinner.setSelection(symbols.indexOf(selected).coerceAtLeast(0))
                 spinner.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onNothingSelected(p:AdapterView<*>?){};override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){selected=symbols[pos]}}
                 content.addView(spinner); val b=bots.firstOrNull{it.symbol==selected}?:bots.first(); controls(b.symbol,b.risk,b.leverage)
-                cardBlock("General","Modo oscuro · Español\nDatos públicos de mercado · Sin claves privadas\nSolo simulación: no se envían órdenes reales.")
+                cardBlock("Costes simulados","Comisión taker: 0,06% por lado · Deslizamiento: 0,02% por lado · Financiación estimada: 0,01% cada 8 h. Son hipótesis configuradas, no tarifas verificadas de tu cuenta; la financiación real cambia por contrato y momento.")
+                cardBlock("IA local adaptativa","Cada bot conserva sus propios pesos y aprende tras cada cierre con el resultado neto de costes. A partir de 20 operaciones cerradas puede filtrar señales con baja probabilidad estimada; antes de ese mínimo no hay evidencia suficiente. No es una red neuronal grande ni garantiza rentabilidad.")
+                cardBlock("General","Modo oscuro · Español\nDatos públicos de mercado · Sin claves privadas\nSolo simulación: no se envían órdenes reales. La viabilidad debe comprobarse con backtesting temporal y paper trading.")
                 cardBlock("Continuidad","Android puede limitar procesos en segundo plano. Revisa la optimización de batería para mejorar la continuidad.")
             }
         }
