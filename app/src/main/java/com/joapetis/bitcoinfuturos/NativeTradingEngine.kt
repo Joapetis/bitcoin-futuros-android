@@ -80,7 +80,7 @@ object NativeTradingEngine {
             val entry = b.optDouble("entry", 0.0)
             val side = b.optString("side", "FLAT")
             val floating = if (entry > 0 && p > 0 && side != "FLAT")
-                (if (side == "LONG") p-entry else entry-p) / entry * b.optDouble("qty", 0.0) else 0.0
+                (if (side == "LONG") p-entry else entry-p) * b.optDouble("qty", 0.0) else 0.0
             BotSnapshot(s, b.optDouble("balance",100.0), p, b.optDouble("balance",100.0)-b.optDouble("initial",100.0)+floating,
                 side, entry, b.optInt("trades"), b.optInt("wins"), b.optString("lastSignal"),
                 b.optInt("leverage",100), b.optDouble("risk",5.0), b.optInt("learned"))
@@ -127,34 +127,37 @@ object NativeTradingEngine {
             val raw = (trendScore * if (regime == "TENDENCIA") 1.0 else 0.45) + momentumScore + meanReversion + nn.coerceIn(-1.0,1.0)
             val signal = when { raw >= 2.0 -> "LONG"; raw <= -2.0 -> "SHORT"; else -> "FLAT" }
             b.put("lastSignal", "$regime · RSI ${rsi.toInt()} · Señal $signal")
-            if (prevCandleTime <= b.optLong("lastCandle", 0L)) return
-            b.put("lastCandle", prevCandleTime)
+            val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
+            if (newCandle) b.put("lastCandle", prevCandleTime)
             if (side != "FLAT" && entry > 0) {
                 val stop = b.optDouble("stop")
                 val target = b.optDouble("target")
-                val stopHit = if (side == "LONG") close <= stop else close >= stop
-                val targetHit = if (side == "LONG") close >= target else close <= target
-                if (stopHit || targetHit || (signal != "FLAT" && signal != side)) {
-                    val gross = (if (side == "LONG") close-entry else entry-close) / entry * b.optDouble("qty")
-                    val fee = b.optDouble("qty") * 0.0012
+                val candleHigh = highs.last()
+                val candleLow = lows.last()
+                val stopHit = if (side == "LONG") candleLow <= stop else candleHigh >= stop
+                val targetHit = if (side == "LONG") candleHigh >= target else candleLow <= target
+                if (stopHit || targetHit || (newCandle && signal != "FLAT" && signal != side)) {
+                    val exitPrice = if (stopHit) stop else if (targetHit) target else close
+                    val gross = (if (side == "LONG") exitPrice-entry else entry-exitPrice) * b.optDouble("qty")
+                    val fee = b.optDouble("qty") * (entry + exitPrice) * 0.0006
                     val net = gross-fee
                     b.put("balance", max(0.0, b.optDouble("balance")+net))
                     if (net > 0) b.put("wins", b.optInt("wins")+1) else b.put("losses", b.optInt("losses")+1)
                     learn(b, net > 0, trend, returns*100)
                     val h = b.optJSONArray("history") ?: JSONArray()
-                    h.put(JSONObject().put("time", System.currentTimeMillis()).put("side", side).put("entry",entry).put("exit",close).put("pnl",net).put("reason",if(stopHit) "Stop ATR" else if(targetHit) "Objetivo ATR" else "Señal contraria"))
+                    h.put(JSONObject().put("time", System.currentTimeMillis()).put("side", side).put("entry",entry).put("exit",exitPrice).put("pnl",net).put("reason",if(stopHit) "Stop ATR" else if(targetHit) "Objetivo ATR" else "Señal contraria"))
                     while (h.length()>300) h.remove(0)
                     b.put("history",h).put("side","FLAT").put("entry",0.0).put("qty",0.0).put("stop",0.0).put("target",0.0).put("trades",b.optInt("trades")+1)
                 }
-            } else if (side == "FLAT" && signal != "FLAT" && b.optDouble("balance") > 0.5) {
+            } else if (side == "FLAT" && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
                 val riskCash = b.optDouble("balance") * b.optDouble("risk",5.0)/100.0
                 val stopDistance = max(atr*1.8, close*0.001)
                 val maxNotional = b.optDouble("balance") * b.optInt("leverage",100)
-                val qty = min(riskCash * close / stopDistance, maxNotional)
+                val qty = min(riskCash / stopDistance, maxNotional / close)
                 if (qty > 0 && qty.isFinite()) {
                     val stop = if(signal=="LONG") close-stopDistance else close+stopDistance
                     val target = if(signal=="LONG") close+atr*2.7 else close-atr*2.7
-                    b.put("side",signal).put("entry",close).put("qty",qty).put("stop",stop).put("target",target)
+                    b.put("side",signal).put("entry",close).put("qty",qty).put("stop",stop).put("target",target).put("lastEntryCandle",prevCandleTime)
                 }
             }
         }
