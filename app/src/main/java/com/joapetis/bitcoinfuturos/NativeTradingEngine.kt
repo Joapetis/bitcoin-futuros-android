@@ -134,12 +134,10 @@ object NativeTradingEngine {
             val trend = ((ema9-ema21)/close*100.0).coerceIn(-3.0,3.0)
             val regime = if (abs(ema50-ema200)/close > 0.004) "TENDENCIA" else "RANGO"
             val nn = (b.optDouble("nnBias") + b.optDouble("nnTrend")*(trend/3.0).coerceIn(-1.0,1.0) + b.optDouble("nnMomentum")*((returns*100)/5.0).coerceIn(-1.0,1.0)).coerceIn(-1.0,1.0)
-            val trendScore = (if (ema9 > ema21) 1 else -1) + (if (ema50 > ema200) 1 else -1)
-            val momentumScore = when { returns > 0.004 && rsi in 48.0..72.0 -> 1; returns < -0.004 && rsi in 28.0..52.0 -> -1; else -> 0 }
-            val meanReversion = if (regime == "RANGO") when { rsi < 28 -> 1; rsi > 72 -> -1; else -> 0 } else 0
-            val raw = (trendScore * if (regime == "TENDENCIA") 1.0 else 0.45) + momentumScore + meanReversion + nn.coerceIn(-1.0,1.0)
-            val signal = when { raw >= 2.0 -> "LONG"; raw <= -2.0 -> "SHORT"; else -> "FLAT" }
-            b.put("lastSignal", "$regime · RSI ${rsi.toInt()} · Señal $signal")
+            val strategy = strategyFor(symbol)
+            val signal = strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200, rsi, atr, regime, returns)
+            b.put("strategy", strategy)
+            b.put("lastSignal", "$strategy · $regime · RSI ${rsi.toInt()} · Señal $signal")
             val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
             if (newCandle) b.put("lastCandle", prevCandleTime)
             if (side != "FLAT" && entry > 0) {
@@ -173,6 +171,109 @@ object NativeTradingEngine {
                     b.put("side",signal).put("entry",close).put("qty",qty).put("stop",stop).put("target",target).put("lastEntryCandle",prevCandleTime)
                 }
             }
+        }
+    }
+
+    // Cada símbolo tiene una familia de señales propia; no se comparte un score genérico.
+    private fun strategyFor(symbol: String): String = when(symbol) {
+        "BTC-USDT" -> "Tendencia EMA + breakout"
+        "ETH-USDT" -> "Cruce EMA + momentum RSI"
+        "SOL-USDT" -> "Ruptura de volatilidad ATR"
+        "XRP-USDT" -> "Reversión a la media"
+        "DOGE-USDT" -> "Impulso con filtro de volumen"
+        "BNB-USDT" -> "Retroceso en tendencia"
+        "LINK-USDT" -> "Ruptura Donchian"
+        "ADA-USDT" -> "Reversión Bollinger/RSI"
+        "AVAX-USDT" -> "Tendencia con filtro ATR"
+        "SUI-USDT" -> "Momentum multi-ventana"
+        else -> "Estrategia conservadora"
+    }
+
+    private fun strategySignal(
+        symbol:String, candles:List<JSONArray>, closes:List<Double>, highs:List<Double>, lows:List<Double>,
+        ema9:Double, ema21:Double, ema50:Double, ema200:Double, rsi:Double, atr:Double,
+        regime:String, returns:Double
+    ):String {
+        if(closes.size<60) return "FLAT"
+        val close=closes.last()
+        val prev=closes[closes.lastIndex-1]
+        val recentHigh=highs.takeLast(21).dropLast(1).maxOrNull() ?: close
+        val recentLow=lows.takeLast(21).dropLast(1).minOrNull() ?: close
+        val range=closes.takeLast(20)
+        val mean=range.average()
+        val sd=sqrt(range.sumOf{(it-mean)*(it-mean)}/range.size)
+        val upper=mean+2.0*sd
+        val lower=mean-2.0*sd
+        val volumes=candles.map{it.optDouble(5)}
+        val volNow=volumes.lastOrNull() ?: 0.0
+        val volAvg=volumes.takeLast(20).dropLast(1).average().takeIf{it>0} ?: volNow
+        val volRatio=if(volAvg>0) volNow/volAvg else 1.0
+        val atrPct=if(close>0) atr/close else 0.0
+        return when(symbol) {
+            // Trend + breakout, confirmation by longer EMA and RSI; no signal in flat markets.
+            "BTC-USDT" -> when {
+                close>recentHigh && ema50>ema200 && rsi in 52.0..72.0 -> "LONG"
+                close<recentLow && ema50<ema200 && rsi in 28.0..48.0 -> "SHORT"
+                else -> "FLAT"
+            }
+            // EMA cross direction with momentum confirmation.
+            "ETH-USDT" -> when {
+                ema9>ema21 && prev<=ema9 && returns>0.001 && rsi in 50.0..70.0 -> "LONG"
+                ema9<ema21 && prev>=ema9 && returns< -0.001 && rsi in 30.0..50.0 -> "SHORT"
+                else -> "FLAT"
+            }
+            // High-volatility breakout with ATR expansion.
+            "SOL-USDT" -> when {
+                close>recentHigh && atrPct>0.006 && volRatio>1.05 -> "LONG"
+                close<recentLow && atrPct>0.006 && volRatio>1.05 -> "SHORT"
+                else -> "FLAT"
+            }
+            // Range-only RSI reversal, deliberately blocked in a trend regime.
+            "XRP-USDT" -> if(regime=="RANGO") when {
+                rsi<27 && close<lower -> "LONG"
+                rsi>73 && close>upper -> "SHORT"
+                else -> "FLAT"
+            } else "FLAT"
+            // DOGE requires unusual volume and directional short-term impulse.
+            "DOGE-USDT" -> when {
+                volRatio>1.8 && returns>0.008 && ema9>ema21 && rsi in 52.0..78.0 -> "LONG"
+                volRatio>1.8 && returns< -0.008 && ema9<ema21 && rsi in 22.0..48.0 -> "SHORT"
+                else -> "FLAT"
+            }
+            // BNB enters a pullback only when the larger trend remains intact.
+            "BNB-USDT" -> when {
+                ema50>ema200 && close>ema50 && close<ema21 && rsi in 38.0..52.0 -> "LONG"
+                ema50<ema200 && close<ema50 && close>ema21 && rsi in 48.0..62.0 -> "SHORT"
+                else -> "FLAT"
+            }
+            // LINK uses a wider Donchian breakout window.
+            "LINK-USDT" -> {
+                val hi=highs.takeLast(56).dropLast(1).maxOrNull() ?: recentHigh
+                val lo=lows.takeLast(56).dropLast(1).minOrNull() ?: recentLow
+                when { close>hi && ema50>ema200 -> "LONG"; close<lo && ema50<ema200 -> "SHORT"; else -> "FLAT" }
+            }
+            // ADA uses Bollinger-style mean reversion with RSI confirmation.
+            "ADA-USDT" -> if(regime=="RANGO") when {
+                close<lower && rsi<32 -> "LONG"
+                close>upper && rsi>68 -> "SHORT"
+                else -> "FLAT"
+            } else "FLAT"
+            // AVAX only trades a clear trend and requires movement larger than noise.
+            "AVAX-USDT" -> when {
+                ema9>ema21 && ema21>ema50 && ema50>ema200 && returns>0.003 && atrPct>0.004 -> "LONG"
+                ema9<ema21 && ema21<ema50 && ema50<ema200 && returns< -0.003 && atrPct>0.004 -> "SHORT"
+                else -> "FLAT"
+            }
+            // SUI requires both 4h-ish and 12h momentum to agree with EMA direction.
+            "SUI-USDT" -> {
+                val m4=if(closes[closes.lastIndex-4]!=0.0) close/closes[closes.lastIndex-4]-1 else 0.0
+                when {
+                    m4>0.006 && returns>0.01 && ema9>ema21 && rsi in 55.0..78.0 -> "LONG"
+                    m4< -0.006 && returns< -0.01 && ema9<ema21 && rsi in 22.0..45.0 -> "SHORT"
+                    else -> "FLAT"
+                }
+            }
+            else -> "FLAT"
         }
     }
 
