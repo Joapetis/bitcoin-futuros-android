@@ -154,7 +154,7 @@ class MainActivity : Activity() {
                 if(data.size<2)return
                 val lo=data.minOf{it.close};val hi=data.maxOf{it.close};val span=(hi-lo).takeIf{it>0}?:1.0
                 p.color=if(data.last().close>=data.first().close)green else Color.rgb(255,77,90)
-                p.strokeWidth=dp(1.5).toFloat();p.style=Paint.Style.STROKE
+                p.strokeWidth=(1.5f * resources.displayMetrics.density);p.style=Paint.Style.STROKE
                 val path=Path()
                 data.forEachIndexed{i,k->
                     val x=width.toFloat()*i/(data.size-1)
