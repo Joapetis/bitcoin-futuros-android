@@ -73,7 +73,7 @@ class MainActivity : Activity() {
         if (!::content.isInitialized) return
         val bots=NativeTradingEngine.snapshots()
         val pnl=bots.sumOf { it.pnl }
-        val equity=bots.sumOf { it.balance } + bots.sumOf { b -> if(b.entry>0 && b.price>0 && b.position!="FLAT") (if(b.position=="LONG") b.price-b.entry else b.entry-b.price)/b.entry*100.0 else 0.0 }
+        val equity=1000.0+pnl
         summary.text="P/L simulado: ${money(pnl)}   ·   Capital: ${money(equity)}"
         content.removeAllViews()
         when(page) {
