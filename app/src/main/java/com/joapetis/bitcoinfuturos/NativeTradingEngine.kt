@@ -23,6 +23,15 @@ data class BotSnapshot(
 )
 
 object NativeTradingEngine {
+    // Conservative assumptions for a simulated taker order; verify the account's actual fee tier.
+    private const val TAKER_FEE_RATE = 0.0006       // 0.06% per side
+    private const val SLIPPAGE_RATE = 0.0002        // 0.02% adverse fill per side
+    private const val FUNDING_RATE_PER_8H = 0.0001  // assumed 0.01% per 8h; actual funding varies
+    private const val MIN_REWARD_TO_COST = 2.0
+    private const val MIN_LEARNED_TRADES = 20
+    private const val MIN_PREDICTED_WIN = 0.53
+    private const val HOUR_MS = 3_600_000L
+
     private val symbols = listOf("BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT", "BNB-USDT", "LINK-USDT", "ADA-USDT", "AVAX-USDT", "SUI-USDT")
     private val lock = Any()
     private val bots = linkedMapOf<String, JSONObject>()
@@ -150,10 +159,16 @@ object NativeTradingEngine {
                 val stopHit = afterEntryCandle && (if (side == "LONG") candleLow <= stop else candleHigh >= stop)
                 val targetHit = afterEntryCandle && (if (side == "LONG") candleHigh >= target else candleLow <= target)
                 if (stopHit || targetHit || (newCandle && signal != "FLAT" && signal != side)) {
-                    val exitPrice = if (stopHit) stop else if (targetHit) target else close
-                    val gross = (if (side == "LONG") exitPrice-entry else entry-exitPrice) * b.optDouble("qty")
-                    val fee = b.optDouble("qty") * (entry + exitPrice) * 0.0006
-                    val net = gross-fee
+                    val rawExit = if (stopHit) stop else if (targetHit) target else close
+                    // Simulated market execution: taker commission + adverse slippage on both sides.
+                    val qty = b.optDouble("qty")
+                    val entryNotional = qty * entry
+                    val exitPrice = rawExit * (if (side == "LONG") 1.0 - SLIPPAGE_RATE else 1.0 + SLIPPAGE_RATE)
+                    val gross = (if (side == "LONG") exitPrice-entry else entry-exitPrice) * qty
+                    val fee = (entryNotional + qty * exitPrice) * TAKER_FEE_RATE
+                    val barsHeld = max(1L, (prevCandleTime - b.optLong("entryCandle", prevCandleTime)) / HOUR_MS)
+                    val funding = entryNotional * FUNDING_RATE_PER_8H * (barsHeld / 8.0)
+                    val net = gross - fee - funding
                     b.put("balance", max(0.0, b.optDouble("balance")+net))
                     if (net > 0) b.put("wins", b.optInt("wins")+1) else b.put("losses", b.optInt("losses")+1)
                     learn(b, net > 0, trend, returns*100)
@@ -162,15 +177,28 @@ object NativeTradingEngine {
                     while (h.length()>300) h.remove(0)
                     b.put("history",h).put("side","FLAT").put("entry",0.0).put("qty",0.0).put("stop",0.0).put("target",0.0).put("trades",b.optInt("trades")+1)
                 }
-            } else if (side == "FLAT" && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
+            } else if (side == "FLAT" && newCandle && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
                 val riskCash = b.optDouble("balance") * b.optDouble("risk",5.0)/100.0
                 val stopDistance = max(atr*1.8, close*0.001)
+                val targetDistance = atr*2.7
+                val estimatedRoundTripCostRate = 2.0 * (TAKER_FEE_RATE + SLIPPAGE_RATE) + FUNDING_RATE_PER_8H
+                val expectedMoveRate = targetDistance / close
+                val predictedWin = predictedWinProbability(b, trend, returns*100.0)
+                val sampleCount = b.optInt("learned", 0)
+                // Avoid trades whose target cannot reasonably cover fees/slippage/funding.
+                // Once enough closes exist, the on-device online learner can veto weak setups.
+                val costsCovered = expectedMoveRate >= estimatedRoundTripCostRate * MIN_REWARD_TO_COST
+                val learnerAllows = sampleCount < MIN_LEARNED_TRADES || predictedWin >= MIN_PREDICTED_WIN
                 val maxNotional = b.optDouble("balance") * b.optInt("leverage",100)
                 val qty = min(riskCash / stopDistance, maxNotional / close)
-                if (qty > 0 && qty.isFinite()) {
-                    val stop = if(signal=="LONG") close-stopDistance else close+stopDistance
-                    val target = if(signal=="LONG") close+atr*2.7 else close-atr*2.7
-                    b.put("side",signal).put("entry",close).put("qty",qty).put("stop",stop).put("target",target).put("lastEntryCandle",prevCandleTime).put("entryCandle",prevCandleTime)
+                if (costsCovered && learnerAllows && qty > 0 && qty.isFinite()) {
+                    val executedEntry = close * (if (signal == "LONG") 1.0 + SLIPPAGE_RATE else 1.0 - SLIPPAGE_RATE)
+                    val stop = if(signal=="LONG") executedEntry-stopDistance else executedEntry+stopDistance
+                    val target = if(signal=="LONG") executedEntry+targetDistance else executedEntry-targetDistance
+                    b.put("side",signal).put("entry",executedEntry).put("qty",qty).put("stop",stop).put("target",target)
+                        .put("lastEntryCandle",prevCandleTime).put("entryCandle",prevCandleTime)
+                } else {
+                    b.put("lastSignal", "$strategy · Entrada filtrada por costes/IA (${(predictedWin*100).toInt()}%)")
                 }
             }
         }
@@ -277,6 +305,14 @@ object NativeTradingEngine {
             }
             else -> "FLAT"
         }
+    }
+
+    private fun predictedWinProbability(b: JSONObject, trend: Double, momentum: Double): Double {
+        val x1 = trend.coerceIn(-3.0, 3.0) / 3.0
+        val x2 = momentum.coerceIn(-5.0, 5.0) / 5.0
+        val z = (b.optDouble("nnBias") + b.optDouble("nnTrend") * x1 +
+            b.optDouble("nnMomentum") * x2).coerceIn(-20.0, 20.0)
+        return 1.0 / (1.0 + Math.exp(-z))
     }
 
     private fun learn(b: JSONObject, won: Boolean, trend: Double, momentum: Double) {
