@@ -486,38 +486,52 @@ function analyze(){
     add('range','Rango lateral / reversión a la media',v,2,note);
   }
 
-  // Filtro adaptativo tipo ensemble: clasifica tendencia/rango/volatilidad y
-  // ajusta la confianza de la señal. Es un modelo heurístico local, no una IA entrenada.
+  // Ensemble adaptativo: combina regímenes, consenso ponderado y calidad de vela.
+  // Es una heurística local explicable, no un modelo ML entrenado ni una garantía predictiva.
   const W=votes.reduce((s,x)=>s+x.w,0);
   let rawScore=votes.reduce((s,x)=>s+x.v*x.w,0)/W*100;
-  const atr=I.atr[i], atrPct=atr/px;
+  const atr=I.atr[i], atrPct=Number.isFinite(atr)&&px>0?atr/px:1;
   const e50=I.ema50[i],e200=I.ema200[i],e9=I.ema9[i],e21=I.ema21[i];
   const trendStrength=(e50!=null&&e200!=null&&px>0)?Math.abs(e50-e200)/px:0;
   const bbWidth=(I.bb.up[i]!=null&&I.bb.lo[i]!=null&&px>0)?(I.bb.up[i]-I.bb.lo[i])/px:0;
   const isTrend=trendStrength>0.004 && e9!=null && e21!=null && Math.sign(e9-e21)===Math.sign((e50||px)-(e200||px));
   const isRange=bbWidth>0 && bbWidth<0.018 && trendStrength<0.004;
-  let regime='mixed',confidence=50;
+  let regime='mixed',confidence=46;
   if(isTrend){
     regime='trend';
     const trendSide=Math.sign((e50||px)-(e200||px));
-    rawScore=rawScore*0.78+trendSide*Math.min(100,trendStrength*8000)*0.22;
-    confidence=Math.min(95,55+Math.min(25,trendStrength*2500)+Math.min(15,Math.abs(rawScore)*0.15));
+    rawScore=rawScore*0.72+trendSide*Math.min(100,trendStrength*8000)*0.28;
+    confidence=Math.min(91,52+Math.min(22,trendStrength*2200)+Math.min(12,Math.abs(rawScore)*0.13));
   }else if(isRange){
     regime='range';
     const rv=votes.find(x=>x.id==='range');
-    rawScore=rawScore*0.82+(rv?rv.v*100:0)*0.18;
-    confidence=Math.min(88,48+Math.min(25,Math.abs(rawScore)*0.25));
+    rawScore=rawScore*0.78+(rv?rv.v*100:0)*0.22;
+    confidence=Math.min(86,45+Math.min(23,Math.abs(rawScore)*0.24));
   }else{
-    confidence=Math.min(82,42+Math.abs(rawScore)*0.38);
+    confidence=Math.min(78,38+Math.abs(rawScore)*0.36);
   }
-  // Penaliza volatilidad extrema y señales con poca separación entre EMAs.
+  const score=clamp(rawScore,-100,100),sg=Math.sign(score);
+  const directional=votes.filter(x=>x.v*sg>=0.3);
+  const agree=directional.length;
+  const directionalWeight=directional.reduce((s,x)=>s+x.w*Math.min(1,Math.abs(x.v)),0);
+  const consensus=clamp(directionalWeight/Math.max(0.001,W),0,1);
+  // Calidad de vela: penaliza velas indecisas y movimientos sin volumen relativo.
+  const candle=cs[i],range=Math.max(1e-12,candle.h-candle.l);
+  const closeQuality=sg>0?(candle.c-candle.l)/range:sg<0?(candle.h-candle.c)/range:0.5;
+  const volumeRatio=Number.isFinite(vr)?vr:1;
+  confidence+=Math.max(-10,Math.min(8,(consensus-0.45)*18));
+  confidence+=(closeQuality-0.5)*8;
+  if(volumeRatio<0.55)confidence-=7;
+  else if(volumeRatio>1.15&&closeQuality>0.65)confidence+=3;
+  // Evita perseguir precios excesivamente alejados de la EMA21.
+  if(e21!=null&&Math.abs(px-e21)/px>Math.max(0.012,atrPct*2.8))confidence-=8;
   if(atrPct>0.035)confidence-=18;
   if(e9!=null&&e21!=null&&Math.abs(e9-e21)/px<0.00035)confidence-=8;
+  // No usar señales de calidad dudosa cuando el candle actual está incompleto y el
+  // precio está cerca de la apertura de esa vela (mercado sin desplazamiento claro).
+  if(closeQuality<0.25)confidence-=4;
   confidence=clamp(confidence,5,95);
-  const score=clamp(rawScore,-100,100);
-  const sg=Math.sign(score);
-  const agree=votes.filter(x=>x.v*sg>=0.3).length;
-  return {id:++analysisId,score,votes,agree,atr,atrPct,px,rsi:rs,regime,confidence};
+  return {id:++analysisId,score,votes,agree,consensus,atr,atrPct,px,rsi:rs,regime,confidence,volumeRatio,closeQuality};
 }
 
 /* ---------- plan de operación y tamaño ---------- */
@@ -585,7 +599,7 @@ function stepBot(a,now){
   if(!Number.isFinite(px)||px<=0||!Number.isFinite(a.atr)||a.atr<=0||B.balance<=0){watchSide=0;pend=null;holdMsg='Datos o capital insuficientes; no se abre operación.';return;}
   if(pend&&pend.type==='ENTER'){
     const riskBlock=entryRiskBlock(now);
-    const still=!riskBlock&&sg===pend.side&&mag>=thr*0.75&&a.agree>=MIN_AGREE-1&&volOk&&fresh();
+    const still=!riskBlock&&sg===pend.side&&mag>=thr*0.8&&a.agree>=MIN_AGREE&&a.confidence>=53&&a.consensus>=0.34&&volOk&&fresh();
     if(!still){alertUser('warn',riskBlock?'Pausa de riesgo':'Señal cancelada',riskBlock||`La ${pend.side>0?'compra':'venta'} dejó de cumplir las condiciones. No se abre operación.`);pend=null;cooldownUntil=now+30000;return;}
     pend.plan=plan(pend.side,a,px);pendTicks(now);
     if(now>=pend.due){const s=pend.side;pend=null;openPos(s,a,now);}
@@ -594,7 +608,7 @@ function stepBot(a,now){
   if(now<cooldownUntil||!fresh()){watchSide=0;return;}
   const riskBlock=entryRiskBlock(now);
   if(riskBlock){watchSide=0;holdMsg=riskBlock;return;}
-  if(mag>=thr&&a.agree>=MIN_AGREE&&a.confidence>=50){
+  if(mag>=thr&&a.agree>=MIN_AGREE&&a.confidence>=55&&a.consensus>=0.38){
     if(!volOk){holdMsg='Hay señal, pero la volatilidad es muy baja para cubrir comisiones.';watchSide=sg;return;}
     const pl=plan(sg,a,px);
     pend={type:'ENTER',side:sg,start:now,due:now+S.notice*1000,plan:pl,warned10:S.notice<=10,lastSec:null};
