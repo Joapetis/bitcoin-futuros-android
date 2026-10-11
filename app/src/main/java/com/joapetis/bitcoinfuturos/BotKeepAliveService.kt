@@ -79,7 +79,7 @@ class BotKeepAliveService : Service() {
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
         return builder.setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .setContentTitle("Crypto Futures · v0.2")
+            .setContentTitle("Crypto Futures · v0.3")
             .setContentText("P/L: ${String.format(Locale.US, "%.2f", pnl)} USDT · Capital: ${String.format(Locale.US, "%.2f", capital)} USDT")
             .setStyle(Notification.BigTextStyle().bigText(
                 "P/L global: ${String.format(Locale.US, "%.2f", pnl)} USDT\nCapital simulado: ${String.format(Locale.US, "%.2f", capital)} USDT\nMejor bot: $best\n$status\nSolo simulación: no se envían órdenes reales."))
