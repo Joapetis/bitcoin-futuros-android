@@ -24,8 +24,8 @@ data class BotSnapshot(
 
 object NativeTradingEngine {
     // Conservative assumptions for a simulated taker order; verify the account's actual fee tier.
-    private const val TAKER_FEE_RATE = 0.0005       // conservative simulated taker fee assumption: 0.05% per side
-    private const val MAKER_FEE_RATE = 0.0002       // reference assumption only; simulated fills use taker fees
+    private const val TAKER_FEE_RATE = 0.0005       // Binance USDⓈ-M Futures standard user VIP 0 taker: 0.05% per side
+    private const val MAKER_FEE_RATE = 0.0002       // Binance USDⓈ-M Futures standard user VIP 0 maker: 0.02% per side
     private const val SLIPPAGE_RATE = 0.0002        // modelled adverse fill, not a Binance commission
     private const val FUNDING_RATE_PER_8H = 0.0001  // assumed 0.01% per 8h; actual funding varies
     private const val MIN_REWARD_TO_COST = 2.0
@@ -74,7 +74,7 @@ object NativeTradingEngine {
                 .put("price", 0.0).put("entry", 0.0).put("qty", 0.0).put("side", "FLAT")
                 .put("stop", 0.0).put("target", 0.0).put("trades", 0).put("wins", 0)
                 .put("losses", 0).put("learned", 0).put("risk", 5.0).put("leverage", 100)
-                .put("lastCandle", 0L).put("nnBias", 0.0).put("nnTrend", 0.0).put("nnMomentum", 0.0)
+                .put("lastCandle", 0L).put("botBar", "1H").put("nnBias", 0.0).put("nnTrend", 0.0).put("nnMomentum", 0.0)
                 .put("lastSignal", "Analizando mercado").put("history", JSONArray())
         }
         // Keep model state and trade ledger intact across code/version upgrades.
@@ -148,7 +148,8 @@ object NativeTradingEngine {
         if (livePrice != null && livePrice > 0.0) {
             synchronized(lock) { bots[symbol]?.put("price", livePrice) }
         }
-        val candles = fetchCandles(symbol) ?: return
+        val chosenBar = synchronized(lock) { bots[symbol]?.optString("botBar", "1H") ?: "1H" }
+        val candles = fetchCandles(symbol, chosenBar) ?: return
         if (candles.size < 60) return
         val closes = candles.map { it.optDouble(4) }
         val highs = candles.map { it.optDouble(2) }
@@ -203,7 +204,7 @@ object NativeTradingEngine {
                     val exitPrice = rawExit * (if (side == "LONG") 1.0 - SLIPPAGE_RATE else 1.0 + SLIPPAGE_RATE)
                     val gross = (if (side == "LONG") exitPrice-entry else entry-exitPrice) * qty
                     val fee = (entryNotional + qty * exitPrice) * TAKER_FEE_RATE
-                    val barsHeld = max(1L, (prevCandleTime - b.optLong("entryCandle", prevCandleTime)) / HOUR_MS)
+                    val barsHeld = max(1L, (prevCandleTime - b.optLong("entryCandle", prevCandleTime)) / when (chosenBar) { "15m" -> 900_000L; "4H" -> 14_400_000L; "1D" -> 86_400_000L; else -> HOUR_MS })
                     val funding = entryNotional * FUNDING_RATE_PER_8H * (barsHeld / 8.0)
                     val net = gross - fee - funding
                     b.put("balance", max(0.0, b.optDouble("balance")+net))
