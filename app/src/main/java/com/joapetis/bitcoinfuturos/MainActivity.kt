@@ -27,7 +27,7 @@ class MainActivity : Activity() {
     private var detailPrice:TextView? = null; private var liveChart:View? = null
     private val marketPriceViews = mutableMapOf<String, TextView>()
     private val sparklineViews = mutableListOf<View>()
-    private var page="Inicio"; private var selected="BTC-USDT"
+    private var page="Inicio"; private var selected="BTC-USDT"; private var chartBar="1H"
     private val symbols=listOf("BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","DOGE-USDT","BNB-USDT","LINK-USDT","ADA-USDT","AVAX-USDT","SUI-USDT")
     private fun dp(value:Int):Int = (value * resources.displayMetrics.density + 0.5f).toInt()
     private fun money(v:Double)=String.format(Locale.US,"%,.2f USDT",v)
@@ -113,7 +113,25 @@ class MainActivity : Activity() {
                 val b=bots.firstOrNull{it.symbol==selected}?:bots.first()
                 content.addView(text("‹   "+b.symbol.replace("-","/")+"     ★   ⋯",18f,Color.WHITE,true))
                 detailPrice=text(if(b.price>0)String.format(Locale.US,"%,.2f",b.price) else "Cargando precio…",27f,green,true); content.addView(detailPrice)
-                content.addView(text("Precio de mercado · intervalo 1H",11f,muted,false)); chart()
+                content.addView(text("Gráfico de mercado · independiente de los bots",11f,muted,false))
+                val intervalRow=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+                intervalRow.addView(text("Intervalo",12f,Color.WHITE,true),LinearLayout.LayoutParams(0,-2,1f))
+                val intervalSpinner=Spinner(this)
+                val intervals=listOf("1m","5m","15m","1H","4H","1D")
+                intervalSpinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,intervals)
+                intervalSpinner.setSelection(intervals.indexOf(chartBar).coerceAtLeast(0))
+                intervalSpinner.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{
+                    override fun onNothingSelected(p:AdapterView<*>?){}
+                    override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){
+                        val next=intervals[pos]
+                        if(chartBar!=next){chartBar=next;liveChart?.invalidate();NativeTradingEngine.requestChartCandles(selected,chartBar){handler.post{liveChart?.invalidate()}}
+                    }
+                }
+                intervalRow.addView(intervalSpinner,LinearLayout.LayoutParams(dp(112),dp(42)))
+                content.addView(intervalRow)
+                liveChart=null
+                chart()
+                NativeTradingEngine.requestChartCandles(selected,chartBar){handler.post{liveChart?.invalidate()}}
                 panel("Estrategia independiente",NativeTradingEngine.strategyName(b.symbol)+"\n"+b.status); cardBlock("Balance del bot",money(b.balance)+"    P/L "+money(b.pnl))
                 cardBlock("Operación actual","Entrada "+(if(b.entry>0)String.format(Locale.US,"%.5f",b.entry)else "—")+"    ·    "+b.trades+" cierres")
                 controls(b.symbol,b.risk,b.leverage); actionButton("Volver a mercados"){page="Mercados";render()}
@@ -136,7 +154,7 @@ class MainActivity : Activity() {
                 val spinner=Spinner(this); spinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,symbols); spinner.setSelection(symbols.indexOf(selected).coerceAtLeast(0))
                 spinner.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onNothingSelected(p:AdapterView<*>?){};override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){selected=symbols[pos]}}
                 content.addView(spinner); val b=bots.firstOrNull{it.symbol==selected}?:bots.first(); controls(b.symbol,b.risk,b.leverage)
-                cardBlock("Costes simulados · Binance USDⓈ-M","Comisión estándar VIP 0 de referencia: taker 0,05% por lado (órdenes de mercado) y maker 0,02% por lado (órdenes límite que añaden liquidez). El simulador usa taker. Deslizamiento supuesto: 0,02% por lado; financiación estimada: 0,01% cada 8 h. Tu tarifa exacta puede variar por nivel VIP, promociones, descuentos BNB y cuenta; sin conexión privada autenticada no se puede confirmar tu tarifa personal.")
+                cardBlock("Costes simulados · mercado de futuros","Modelo conservador de simulación: comisión taker supuesta 0,05% por lado, deslizamiento supuesto 0,02% por lado y financiación estimada 0,01% cada 8 h. Son hipótesis de simulación, no tarifas oficiales ni comisiones verificadas de OKX/Bybit. Las tarifas reales dependen del mercado, nivel y cuenta; no se consulta ninguna cuenta privada.")
                 cardBlock("IA neuronal local adaptativa","Red neuronal compacta multicapa 3-8-1 (3 entradas, 8 neuronas ocultas y salida de probabilidad), ejecutada en el Pixel sin inferencia en la nube. Cada bot guarda sus pesos y aprende al cerrar operaciones netas. Tras 20 cierres puede filtrar señales débiles. Es un modelo pequeño experimental, no una IA avanzada validada; no garantiza rentabilidad.")
                 cardBlock("General","Modo oscuro · Español\nDatos públicos de mercado · Sin claves privadas\nSolo simulación: no se envían órdenes reales. La viabilidad debe comprobarse con backtesting temporal y paper trading.")
                 cardBlock("Continuidad","Android puede limitar procesos en segundo plano. Revisa la optimización de batería para mejorar la continuidad.")
@@ -194,7 +212,7 @@ class MainActivity : Activity() {
         val v=object:View(this){
             val p=Paint(Paint.ANTI_ALIAS_FLAG)
             override fun onDraw(c:Canvas){
-                val candles=NativeTradingEngine.candles(selected).takeLast(55)
+                val candles=(NativeTradingEngine.chartCandles(selected,chartBar).ifEmpty { if(chartBar=="1H") NativeTradingEngine.candles(selected) else emptyList() }).takeLast(70)
                 val w=width.toFloat(); val h=height.toFloat()
                 if(w<=0f||h<=0f)return
                 p.style=Paint.Style.FILL
@@ -204,7 +222,7 @@ class MainActivity : Activity() {
                 for(i in 0..5)c.drawLine(w*i/5,0f,w*i/5,h,p)
                 if(candles.size<2){
                     p.color=muted;p.textSize=dp(12).toFloat()
-                    c.drawText("Esperando datos reales de velas…",dp(12).toFloat(),h/2,p);return
+                    c.drawText("Cargando velas "+chartBar+"…",dp(12).toFloat(),h/2,p);return
                 }
                 val minP=candles.minOf{it.low}; val maxP=candles.maxOf{it.high}
                 val range=(maxP-minP).takeIf{it>0}?:1.0
@@ -238,7 +256,7 @@ class MainActivity : Activity() {
         }
         v.layoutParams=LinearLayout.LayoutParams(-1,dp(260))
         content.addView(v)
-        content.addView(text("● Alcista     ● Bajista                 VOLUMEN · VELAS 1H",10f,muted,false))
+        content.addView(text("● Alcista     ● Bajista                 VOLUMEN · VELAS "+chartBar,10f,muted,false))
     }
     private fun overviewCard(pnl:Double,capital:Double){
         val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(12),dp(14),dp(12));setBackgroundColor(card)}
