@@ -44,7 +44,8 @@ object NativeTradingEngine {
     private val bots = linkedMapOf<String, JSONObject>()
     private val candleCache = linkedMapOf<String, List<CandleSnapshot>>()
     private val chartCandleCache = linkedMapOf<String, List<CandleSnapshot>>()
-    private val chartExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val chartExecutor = java.util.concurrent.Executors.newFixedThreadPool(3)
+    private val chartRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val quoteClient = OkHttpClient.Builder()
         .pingInterval(20, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
@@ -264,18 +265,16 @@ object NativeTradingEngine {
     fun requestChartCandles(symbol: String, bar: String, onLoaded: () -> Unit) {
         val supported = setOf("1m", "5m", "15m", "1H", "4H", "1D")
         if (bar !in supported) return
+        val key = "$symbol|$bar"
+        if (!chartRequests.add(key)) { try { onLoaded() } catch (_: Exception) {}; return }
         chartExecutor.execute {
-            val rows = fetchCandles(symbol, bar)
-            if (rows != null) {
-                val parsed = rows.mapNotNull { row ->
-                    if (row.length() < 6) null else CandleSnapshot(
-                        row.optLong(0), row.optDouble(1), row.optDouble(2),
-                        row.optDouble(3), row.optDouble(4), row.optDouble(5)
-                    )
+            try {
+                val parsed = fetchCandles(symbol, bar)?.mapNotNull { row ->
+                    if (row.length() < 6) null else CandleSnapshot(row.optLong(0), row.optDouble(1), row.optDouble(2), row.optDouble(3), row.optDouble(4), row.optDouble(5))
                 }
-                synchronized(lock) { chartCandleCache["$symbol|$bar"] = parsed.takeLast(220) }
-            }
-            try { onLoaded() } catch (_: Exception) {}
+                if (!parsed.isNullOrEmpty()) synchronized(lock) { chartCandleCache[key] = parsed.takeLast(220) }
+            } catch (e: Exception) { synchronized(lock) { lastError = "Gráfico $symbol $bar: ${e.message ?: "sin conexión"}".take(120) } }
+            finally { chartRequests.remove(key); try { onLoaded() } catch (_: Exception) {} }
         }
     }
     fun marketChange24h(symbol: String): Double = synchronized(lock) {
@@ -664,16 +663,28 @@ object NativeTradingEngine {
     }
 
     private fun fetchCandles(symbol: String, bar: String = "1H"): List<JSONArray>? {
-        val url = URL("https://www.okx.com/api/v5/market/candles?instId=$symbol&bar=$bar&limit=220")
-        val conn = (url.openConnection() as HttpURLConnection)
-        conn.connectTimeout=7000; conn.readTimeout=7000; conn.requestMethod="GET"
-        return try {
-            val body=conn.inputStream.bufferedReader().use { it.readText() }
-            val root=JSONObject(body)
-            if(root.optString("code")!="0") return null
-            val arr=root.optJSONArray("data") ?: return null
-            (0 until arr.length()).mapNotNull { arr.optJSONArray(it) }.reversed()
-        } finally { conn.disconnect() }
+        // Bybit first (primary live source), Binance Futures second, OKX as final fallback.
+        val interval = when (bar) { "1m" -> "1"; "5m" -> "5"; "15m" -> "15"; "1H" -> "60"; "4H" -> "240"; "1D" -> "D"; else -> "60" }
+        try {
+            val url = URL("https://api.bybit.com/v5/market/kline?category=linear&symbol=" + symbol.replace("-", "") + "&interval=" + interval + "&limit=220")
+            val conn = (url.openConnection() as HttpURLConnection).apply { connectTimeout=2500; readTimeout=2500; requestMethod="GET" }
+            try {
+                val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                val arr = root.optJSONObject("result")?.optJSONArray("list")
+                if (root.optInt("retCode", -1) == 0 && arr != null && arr.length() > 0) return (0 until arr.length()).mapNotNull { arr.optJSONArray(it) }.reversed()
+            } finally { conn.disconnect() }
+        } catch (_: Exception) {}
+        try {
+            val binanceInterval = when (bar) { "1H" -> "1h"; "4H" -> "4h"; "1D" -> "1d"; else -> bar }
+            val url = URL("https://fapi.binance.com/fapi/v1/klines?symbol=" + symbol.replace("-", "") + "&interval=" + binanceInterval + "&limit=220")
+            val conn = (url.openConnection() as HttpURLConnection).apply { connectTimeout=2500; readTimeout=2500; requestMethod="GET" }
+            try { val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() }); if (arr.length() > 0) return (0 until arr.length()).mapNotNull { arr.optJSONArray(it) } } finally { conn.disconnect() }
+        } catch (_: Exception) {}
+        try {
+            val url = URL("https://www.okx.com/api/v5/market/candles?instId=$symbol&bar=$bar&limit=220")
+            val conn = (url.openConnection() as HttpURLConnection).apply { connectTimeout=2500; readTimeout=2500; requestMethod="GET" }
+            try { val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() }); if (root.optString("code") != "0") return null; val arr = root.optJSONArray("data") ?: return null; return (0 until arr.length()).mapNotNull { arr.optJSONArray(it) }.reversed() } finally { conn.disconnect() }
+        } catch (_: Exception) { return null }
     }
     private fun ema(v: List<Double>, n: Int): Double {
         if(v.isEmpty()) return 0.0
