@@ -24,8 +24,9 @@ data class BotSnapshot(
 
 object NativeTradingEngine {
     // Conservative assumptions for a simulated taker order; verify the account's actual fee tier.
-    private const val TAKER_FEE_RATE = 0.0006       // 0.06% per side
-    private const val SLIPPAGE_RATE = 0.0002        // 0.02% adverse fill per side
+    private const val TAKER_FEE_RATE = 0.0005       // Binance USDⓈ-M Futures standard VIP 0 taker fee: 0.05% per side
+    private const val MAKER_FEE_RATE = 0.0002       // Binance USDⓈ-M Futures standard VIP 0 maker fee: 0.02% per side (not used for market fills)
+    private const val SLIPPAGE_RATE = 0.0002        // modelled adverse fill, not a Binance commission
     private const val FUNDING_RATE_PER_8H = 0.0001  // assumed 0.01% per 8h; actual funding varies
     private const val MIN_REWARD_TO_COST = 2.0
     private const val MIN_LEARNED_TRADES = 20
@@ -307,29 +308,69 @@ object NativeTradingEngine {
         }
     }
 
+    private fun modelFeatures(trend: Double, momentum: Double): DoubleArray =
+        doubleArrayOf(1.0, (trend / 3.0).coerceIn(-1.0,1.0), (momentum / 5.0).coerceIn(-1.0,1.0))
+
+    // Compact 3-8-1 multilayer perceptron: runs locally on the phone, no network inference.
+    // Per-bot weights are stored in JSON so learning survives app/process restarts and upgrades.
+    private fun modelWeights(b: JSONObject, key: String, count: Int, scale: Double): DoubleArray {
+        val saved = b.optJSONArray(key)
+        if (saved != null && saved.length() == count) return DoubleArray(count) { saved.optDouble(it) }
+        return DoubleArray(count) { i ->
+            // Deterministic tiny initialization avoids resetting weights on every process restart.
+            val v = kotlin.math.sin((i + 1) * 12.9898 + key.hashCode()) * 43758.5453
+            ((v - kotlin.math.floor(v)) * 2.0 - 1.0) * scale
+        }
+    }
+
+    private fun saveWeights(b: JSONObject, key: String, values: DoubleArray) {
+        val arr = JSONArray()
+        values.forEach { arr.put(it) }
+        b.put(key, arr)
+    }
+
+    private fun sigmoid(x: Double): Double = 1.0 / (1.0 + Math.exp(-x.coerceIn(-20.0,20.0)))
+
+    private fun forward(features: DoubleArray, w1: DoubleArray, w2: DoubleArray): Pair<DoubleArray, Double> {
+        val hidden = DoubleArray(8)
+        for (h in 0 until 8) {
+            var z = 0.0
+            for (i in features.indices) z += features[i] * w1[h * features.size + i]
+            hidden[h] = kotlin.math.tanh(z.coerceIn(-10.0,10.0))
+        }
+        var out = w2[0]
+        for (h in 0 until 8) out += hidden[h] * w2[h + 1]
+        return hidden to sigmoid(out)
+    }
+
     private fun predictedWinProbability(b: JSONObject, trend: Double, momentum: Double): Double {
-        val x1 = trend.coerceIn(-3.0, 3.0) / 3.0
-        val x2 = momentum.coerceIn(-5.0, 5.0) / 5.0
-        val z = (b.optDouble("nnBias") + b.optDouble("nnTrend") * x1 +
-            b.optDouble("nnMomentum") * x2).coerceIn(-20.0, 20.0)
-        return 1.0 / (1.0 + Math.exp(-z))
+        val features = modelFeatures(trend, momentum)
+        val w1 = modelWeights(b, "mlpW1", 24, 0.12)
+        val w2 = modelWeights(b, "mlpW2", 9, 0.12)
+        return forward(features, w1, w2).second
     }
 
     private fun learn(b: JSONObject, won: Boolean, trend: Double, momentum: Double) {
-        // Tiny online logistic learner, deliberately conservative; persistent weights survive upgrades.
+        val features = modelFeatures(trend, momentum)
         val y = if (won) 1.0 else 0.0
-        val x1 = trend.coerceIn(-3.0,3.0)/3.0
-        val x2 = momentum.coerceIn(-5.0,5.0)/5.0
-        val bias = b.optDouble("nnBias")
-        val w1 = b.optDouble("nnTrend")
-        val w2 = b.optDouble("nnMomentum")
-        val z = (bias + w1*x1 + w2*x2).coerceIn(-20.0,20.0)
-        val pred = 1.0/(1.0+Math.exp(-z))
-        val delta = (y-pred)*0.03
-        b.put("nnBias", (bias+delta).coerceIn(-3.0,3.0))
-            .put("nnTrend",(w1+delta*x1).coerceIn(-3.0,3.0))
-            .put("nnMomentum",(w2+delta*x2).coerceIn(-3.0,3.0))
-            .put("learned",b.optInt("learned")+1)
+        val w1 = modelWeights(b, "mlpW1", 24, 0.12)
+        val w2 = modelWeights(b, "mlpW2", 9, 0.12)
+        val (hidden, prediction) = forward(features, w1, w2)
+        val lr = 0.008
+        val outputDelta = (y - prediction) * prediction * (1.0 - prediction)
+        val oldW2 = w2.copyOf()
+        w2[0] = (w2[0] + lr * (y - prediction)).coerceIn(-2.0,2.0)
+        for (h in 0 until 8) {
+            val hiddenDelta = outputDelta * oldW2[h + 1] * (1.0 - hidden[h] * hidden[h])
+            w2[h + 1] = (w2[h + 1] + lr * (y - prediction) * hidden[h]).coerceIn(-2.0,2.0)
+            for (i in features.indices) {
+                val idx = h * features.size + i
+                w1[idx] = (w1[idx] + lr * hiddenDelta * features[i]).coerceIn(-2.0,2.0)
+            }
+        }
+        saveWeights(b, "mlpW1", w1)
+        saveWeights(b, "mlpW2", w2)
+        b.put("learned",b.optInt("learned")+1)
     }
 
     private fun fetchCandles(symbol: String): List<JSONArray>? {
