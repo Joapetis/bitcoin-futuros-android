@@ -54,6 +54,8 @@ object NativeTradingEngine {
     private var binanceSocket: WebSocket? = null
     private val bybitQuotes = linkedMapOf<String, Double>()
     private val binanceQuotes = linkedMapOf<String, Double>()
+    private val bybitQuoteAt = linkedMapOf<String, Long>()
+    private val binanceQuoteAt = linkedMapOf<String, Long>()
     private var bybitConnectedAt = 0L
     private var binanceConnectedAt = 0L
     private var quoteSocketStarted = false
@@ -125,9 +127,10 @@ object NativeTradingEngine {
     // Bybit linear futures is the primary live quote feed; Binance Futures is an independent
     // secondary reference. OKX REST remains the fallback when both streams are unavailable.
     fun liveQuoteSource(): String = synchronized(lock) {
+        val now = System.currentTimeMillis()
         when {
-            bybitQuotes.values.any { it > 0.0 } -> "Bybit Futures · principal"
-            binanceQuotes.values.any { it > 0.0 } -> "Binance Futures · respaldo"
+            bybitQuoteAt.values.any { now - it < 15_000L } -> "Bybit Futures · principal"
+            binanceQuoteAt.values.any { now - it < 15_000L } -> "Binance Futures · respaldo"
             else -> "OKX REST · respaldo"
         }
     }
@@ -153,6 +156,7 @@ object NativeTradingEngine {
                     val price = data.optString("lastPrice").toDoubleOrNull() ?: return
                     if (symbol in symbols && price > 0.0) synchronized(lock) {
                         bybitQuotes[symbol] = price
+                        bybitQuoteAt[symbol] = System.currentTimeMillis()
                         bots[symbol]?.put("price", price)?.put("priceSource", "BYBIT")
                     }
                 } catch (_: Exception) {}
@@ -179,8 +183,9 @@ object NativeTradingEngine {
                     val price = data.optString("c").toDoubleOrNull() ?: return
                     if (symbol in symbols && price > 0.0) synchronized(lock) {
                         binanceQuotes[symbol] = price
-                        // Secondary source is stored separately; Bybit remains authoritative while fresh.
-                        if (System.currentTimeMillis() - bybitConnectedAt > 15_000L) {
+                        binanceQuoteAt[symbol] = System.currentTimeMillis()
+                        // Binance only takes over if this symbol has no recent Bybit ticks.
+                        if (System.currentTimeMillis() - (bybitQuoteAt[symbol] ?: 0L) > 15_000L) {
                             bots[symbol]?.put("price", price)?.put("priceSource", "BINANCE")
                         }
                     }
@@ -215,7 +220,7 @@ object NativeTradingEngine {
                         val symbol = data.optString("symbol").replace("USDT", "-USDT")
                         val price = data.optString("lastPrice").toDoubleOrNull() ?: return
                         if (symbol in symbols && price > 0.0) synchronized(lock) {
-                            bybitQuotes[symbol] = price; bots[symbol]?.put("price", price)?.put("priceSource", "BYBIT")
+                            bybitQuotes[symbol] = price; bybitQuoteAt[symbol] = System.currentTimeMillis(); bots[symbol]?.put("price", price)?.put("priceSource", "BYBIT")
                         }
                     } catch (_: Exception) {}
                 }
@@ -242,7 +247,8 @@ object NativeTradingEngine {
                         val price = data.optString("c").toDoubleOrNull() ?: return
                         if (symbol in symbols && price > 0.0) synchronized(lock) {
                             binanceQuotes[symbol] = price
-                            if (System.currentTimeMillis() - bybitConnectedAt > 15_000L)
+                            binanceQuoteAt[symbol] = System.currentTimeMillis()
+                            if (System.currentTimeMillis() - (bybitQuoteAt[symbol] ?: 0L) > 15_000L)
                                 bots[symbol]?.put("price", price)?.put("priceSource", "BINANCE")
                         }
                     } catch (_: Exception) {}
@@ -297,15 +303,17 @@ object NativeTradingEngine {
     private fun processSymbol(symbol: String) {
         // Price updates are independent from strategy candles: a candle request must never freeze the quote.
         val streamPrice = synchronized(lock) {
+            val now = System.currentTimeMillis()
             when {
-                System.currentTimeMillis() - bybitConnectedAt < 15_000L -> bybitQuotes[symbol]
-                System.currentTimeMillis() - binanceConnectedAt < 15_000L -> binanceQuotes[symbol]
+                now - (bybitQuoteAt[symbol] ?: 0L) < 15_000L -> bybitQuotes[symbol]
+                now - (binanceQuoteAt[symbol] ?: 0L) < 15_000L -> binanceQuotes[symbol]
                 else -> null
             }
         }
         val streamUnavailable = synchronized(lock) {
-            System.currentTimeMillis() - bybitConnectedAt >= 15_000L &&
-                System.currentTimeMillis() - binanceConnectedAt >= 15_000L
+            val now = System.currentTimeMillis()
+            now - (bybitQuoteAt[symbol] ?: 0L) >= 15_000L &&
+                now - (binanceQuoteAt[symbol] ?: 0L) >= 15_000L
         }
         // Avoid serial REST calls while either public futures stream is healthy.
         val livePrice = streamPrice ?: if (streamUnavailable) fetchLivePrice(symbol) else null
