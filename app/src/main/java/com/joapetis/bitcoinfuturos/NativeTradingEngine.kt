@@ -172,10 +172,27 @@ object NativeTradingEngine {
             val ema9 = ema(closes, 9); val ema21 = ema(closes, 21)
             val ema50 = ema(closes, 50); val ema200 = ema(closes, min(200, closes.size))
             val rsi = rsi(closes, 14)
-            val returns = if (closes.size > 12 && closes[closes.size-12] != 0.0) close / closes[closes.size-12] - 1.0 else 0.0
+            val returns3 = returnOver(closes, 3)
+            val returns12 = returnOver(closes, 12)
+            val returns48 = returnOver(closes, 48)
+            val returns = returns12
             val trend = ((ema9-ema21)/close*100.0).coerceIn(-3.0,3.0)
             val regime = if (abs(ema50-ema200)/close > 0.004) "TENDENCIA" else "RANGO"
-            val nn = (b.optDouble("nnBias") + b.optDouble("nnTrend")*(trend/3.0).coerceIn(-1.0,1.0) + b.optDouble("nnMomentum")*((returns*100)/5.0).coerceIn(-1.0,1.0)).coerceIn(-1.0,1.0)
+            val volumes = candles.map { it.optDouble(5) }
+            val volNow = volumes.lastOrNull() ?: 0.0
+            val volAvg = volumes.takeLast(21).dropLast(1).average().takeIf { it > 0.0 } ?: volNow
+            val volumeRatio = if (volAvg > 0.0) volNow / volAvg else 1.0
+            val atrPct = if (close > 0.0) atr / close else 0.0
+            val rsiFeature = ((rsi - 50.0) / 50.0).coerceIn(-1.0, 1.0)
+            val emaAlignment = ((if (ema9 > ema21) 1.0 else -1.0) +
+                (if (ema21 > ema50) 1.0 else -1.0) +
+                (if (ema50 > ema200) 1.0 else -1.0)) / 3.0
+            val efficiency = directionalEfficiency(closes, 12)
+            val lastRange = max(1e-12, highs.last() - lows.last())
+            val candleBody = ((close - last.optDouble(1)) / lastRange).coerceIn(-1.0, 1.0)
+            val features = modelFeatures(trend, returns3 * 100.0, returns12 * 100.0, returns48 * 100.0,
+                atrPct, volumeRatio, rsiFeature, emaAlignment, efficiency, candleBody,
+                ((ema50 - ema200) / close * 100.0).coerceIn(-3.0, 3.0))
             val strategy = strategyName(symbol)
             val signal = strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200, rsi, atr, regime, returns)
             b.put("strategy", strategy)
@@ -209,7 +226,7 @@ object NativeTradingEngine {
                     val net = gross - fee - funding
                     b.put("balance", max(0.0, b.optDouble("balance")+net))
                     if (net > 0) b.put("wins", b.optInt("wins")+1) else b.put("losses", b.optInt("losses")+1)
-                    learn(b, net > 0, trend, returns*100)
+                    learn(b, net > 0, features)
                     val h = b.optJSONArray("history") ?: JSONArray()
                     h.put(JSONObject().put("time", System.currentTimeMillis()).put("side", side).put("entry",entry).put("exit",exitPrice).put("pnl",net).put("reason",if(stopHit) "Stop ATR" else if(targetHit) "Objetivo ATR" else "Señal contraria"))
                     while (h.length()>300) h.remove(0)
@@ -221,7 +238,7 @@ object NativeTradingEngine {
                 val targetDistance = atr*2.7
                 val estimatedRoundTripCostRate = 2.0 * (TAKER_FEE_RATE + SLIPPAGE_RATE) + FUNDING_RATE_PER_8H
                 val expectedMoveRate = targetDistance / close
-                val predictedWin = predictedWinProbability(b, trend, returns*100.0)
+                val predictedWin = predictedWinProbability(b, features)
                 val sampleCount = b.optInt("learned", 0)
                 // Avoid trades whose target cannot reasonably cover fees/slippage/funding.
                 // Once enough closes exist, the on-device online learner can veto weak setups.
@@ -364,16 +381,48 @@ object NativeTradingEngine {
         }
     }
 
-    private fun modelFeatures(trend: Double, momentum: Double): DoubleArray =
-        doubleArrayOf(1.0, (trend / 3.0).coerceIn(-1.0,1.0), (momentum / 5.0).coerceIn(-1.0,1.0))
+    private fun returnOver(closes: List<Double>, bars: Int): Double {
+        if (closes.size <= bars) return 0.0
+        val base = closes[closes.lastIndex - bars]
+        return if (base > 0.0) (closes.last() / base - 1.0).coerceIn(-1.0, 1.0) else 0.0
+    }
 
-    // Compact 3-8-1 multilayer perceptron: runs locally on the phone, no network inference.
-    // Per-bot weights are stored in JSON so learning survives app/process restarts and upgrades.
+    private fun directionalEfficiency(closes: List<Double>, bars: Int): Double {
+        if (closes.size <= bars) return 0.0
+        val start = closes.size - bars - 1
+        var path = 0.0
+        for (i in start + 1 until closes.size) path += abs(closes[i] - closes[i - 1])
+        val net = closes.last() - closes[start]
+        return if (path > 0.0) (net / path).coerceIn(-1.0, 1.0) else 0.0
+    }
+
+    // 11 market features + bias: trend, 3 momentum horizons, ATR volatility,
+    // relative volume, RSI, EMA alignment, directional efficiency, candle body and long trend.
+    private fun modelFeatures(
+        trend: Double, momentum3: Double, momentum12: Double, momentum48: Double,
+        atrPct: Double, volumeRatio: Double, rsiCentered: Double, emaAlignment: Double,
+        efficiency: Double, candleBody: Double, longTrend: Double
+    ): DoubleArray = doubleArrayOf(
+        1.0,
+        (trend / 3.0).coerceIn(-1.0, 1.0),
+        (momentum3 / 2.0).coerceIn(-1.0, 1.0),
+        (momentum12 / 5.0).coerceIn(-1.0, 1.0),
+        (momentum48 / 12.0).coerceIn(-1.0, 1.0),
+        (atrPct / 0.02).coerceIn(0.0, 1.0),
+        (kotlin.math.ln(max(0.1, volumeRatio)) / 2.0).coerceIn(-1.0, 1.0),
+        rsiCentered.coerceIn(-1.0, 1.0),
+        emaAlignment.coerceIn(-1.0, 1.0),
+        efficiency.coerceIn(-1.0, 1.0),
+        candleBody.coerceIn(-1.0, 1.0),
+        (longTrend / 3.0).coerceIn(-1.0, 1.0)
+    )
+
+    // Local 12-10-1 neural network. Inputs and weights persist per bot; inference needs no internet.
+    // V2 keys intentionally keep legacy weights intact while allowing the richer model to initialize.
     private fun modelWeights(b: JSONObject, key: String, count: Int, scale: Double): DoubleArray {
         val saved = b.optJSONArray(key)
         if (saved != null && saved.length() == count) return DoubleArray(count) { saved.optDouble(it) }
         return DoubleArray(count) { i ->
-            // Deterministic tiny initialization avoids resetting weights on every process restart.
             val v = kotlin.math.sin((i + 1) * 12.9898 + key.hashCode()) * 43758.5453
             ((v - kotlin.math.floor(v)) * 2.0 - 1.0) * scale
         }
@@ -385,48 +434,47 @@ object NativeTradingEngine {
         b.put(key, arr)
     }
 
-    private fun sigmoid(x: Double): Double = 1.0 / (1.0 + Math.exp(-x.coerceIn(-20.0,20.0)))
+    private fun sigmoid(x: Double): Double = 1.0 / (1.0 + Math.exp(-x.coerceIn(-20.0, 20.0)))
 
     private fun forward(features: DoubleArray, w1: DoubleArray, w2: DoubleArray): Pair<DoubleArray, Double> {
-        val hidden = DoubleArray(8)
-        for (h in 0 until 8) {
+        val hidden = DoubleArray(10)
+        for (h in 0 until 10) {
             var z = 0.0
             for (i in features.indices) z += features[i] * w1[h * features.size + i]
-            hidden[h] = kotlin.math.tanh(z.coerceIn(-10.0,10.0))
+            hidden[h] = kotlin.math.tanh(z.coerceIn(-10.0, 10.0))
         }
         var out = w2[0]
-        for (h in 0 until 8) out += hidden[h] * w2[h + 1]
+        for (h in 0 until 10) out += hidden[h] * w2[h + 1]
         return hidden to sigmoid(out)
     }
 
-    private fun predictedWinProbability(b: JSONObject, trend: Double, momentum: Double): Double {
-        val features = modelFeatures(trend, momentum)
-        val w1 = modelWeights(b, "mlpW1", 24, 0.12)
-        val w2 = modelWeights(b, "mlpW2", 9, 0.12)
+    private fun predictedWinProbability(b: JSONObject, features: DoubleArray): Double {
+        val w1 = modelWeights(b, "mlpV2W1", 120, 0.08)
+        val w2 = modelWeights(b, "mlpV2W2", 11, 0.08)
         return forward(features, w1, w2).second
     }
 
-    private fun learn(b: JSONObject, won: Boolean, trend: Double, momentum: Double) {
-        val features = modelFeatures(trend, momentum)
+    private fun learn(b: JSONObject, won: Boolean, features: DoubleArray) {
         val y = if (won) 1.0 else 0.0
-        val w1 = modelWeights(b, "mlpW1", 24, 0.12)
-        val w2 = modelWeights(b, "mlpW2", 9, 0.12)
+        val w1 = modelWeights(b, "mlpV2W1", 120, 0.08)
+        val w2 = modelWeights(b, "mlpV2W2", 11, 0.08)
         val (hidden, prediction) = forward(features, w1, w2)
-        val lr = 0.008
-        val outputDelta = (y - prediction) * prediction * (1.0 - prediction)
+        val lr = 0.003
+        val error = y - prediction
+        val outputDelta = error * prediction * (1.0 - prediction)
         val oldW2 = w2.copyOf()
-        w2[0] = (w2[0] + lr * (y - prediction)).coerceIn(-2.0,2.0)
-        for (h in 0 until 8) {
+        w2[0] = (w2[0] + lr * error).coerceIn(-2.0, 2.0)
+        for (h in 0 until 10) {
             val hiddenDelta = outputDelta * oldW2[h + 1] * (1.0 - hidden[h] * hidden[h])
-            w2[h + 1] = (w2[h + 1] + lr * (y - prediction) * hidden[h]).coerceIn(-2.0,2.0)
+            w2[h + 1] = (w2[h + 1] + lr * error * hidden[h]).coerceIn(-2.0, 2.0)
             for (i in features.indices) {
                 val idx = h * features.size + i
-                w1[idx] = (w1[idx] + lr * hiddenDelta * features[i]).coerceIn(-2.0,2.0)
+                w1[idx] = (w1[idx] + lr * hiddenDelta * features[i]).coerceIn(-2.0, 2.0)
             }
         }
-        saveWeights(b, "mlpW1", w1)
-        saveWeights(b, "mlpW2", w2)
-        b.put("learned",b.optInt("learned")+1)
+        saveWeights(b, "mlpV2W1", w1)
+        saveWeights(b, "mlpV2W2", w2)
+        b.put("learned", b.optInt("learned") + 1).put("modelVersion", 2)
     }
 
     private fun fetchLivePrice(symbol: String): Double? {
