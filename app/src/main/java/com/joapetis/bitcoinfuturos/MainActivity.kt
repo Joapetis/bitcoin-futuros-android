@@ -24,6 +24,7 @@ class MainActivity : Activity() {
     private val blue=Color.rgb(30,132,255); private val green=Color.rgb(0,220,153); private val muted=Color.rgb(137,154,174)
     private val handler=Handler(Looper.getMainLooper())
     private lateinit var root:LinearLayout; private lateinit var content:LinearLayout; private lateinit var summary:TextView
+    private var detailPrice:TextView? = null; private var liveChart:View? = null
     private var page="Inicio"; private var selected="BTC-USDT"
     private val symbols=listOf("BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","DOGE-USDT","BNB-USDT","LINK-USDT","ADA-USDT","AVAX-USDT","SUI-USDT")
     private fun dp(value:Int):Int = (value * resources.displayMetrics.density + 0.5f).toInt()
@@ -37,7 +38,7 @@ class MainActivity : Activity() {
         if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.O) startForegroundService(service) else startService(service)
         render(); handler.post(refreshRunnable)
     }
-    private val refreshRunnable=object:Runnable { override fun run(){ if(::root.isInitialized) updateSummary(); handler.postDelayed(this,4000) } }
+    private val refreshRunnable=object:Runnable { override fun run(){ if(::root.isInitialized){ updateSummary(); detailPrice?.let { priceView -> NativeTradingEngine.snapshots().firstOrNull{it.symbol==selected}?.let { b -> priceView.text=if(b.price>0)String.format(Locale.US,"%,.2f",b.price) else "Esperando precio…" } }; liveChart?.invalidate() }; handler.postDelayed(this,4000) } }
 
     private fun render() {
         root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setBackgroundColor(bg)}
@@ -101,7 +102,7 @@ class MainActivity : Activity() {
             "Detalle" -> {
                 val b=bots.firstOrNull{it.symbol==selected}?:bots.first()
                 content.addView(text("‹   "+b.symbol.replace("-","/")+"     ★   ⋯",18f,Color.WHITE,true))
-                content.addView(text(if(b.price>0)String.format(Locale.US,"%,.2f",b.price) else "Cargando precio…",27f,green,true))
+                detailPrice=text(if(b.price>0)String.format(Locale.US,"%,.2f",b.price) else "Cargando precio…",27f,green,true); content.addView(detailPrice)
                 content.addView(text("Precio de mercado · intervalo 1H",11f,muted,false)); chart()
                 panel("Posiciones",b.position+"  ·  "+b.status); cardBlock("Balance del bot",money(b.balance)+"    P/L "+money(b.pnl))
                 cardBlock("Operación actual","Entrada "+(if(b.entry>0)String.format(Locale.US,"%.5f",b.entry)else "—")+"    ·    "+b.trades+" cierres")
