@@ -1,6 +1,8 @@
 package com.joapetis.bitcoinfuturos
 
 import android.content.Context
+import android.net.Uri
+import android.provider.DocumentsContract
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -63,11 +65,13 @@ object NativeTradingEngine {
     private lateinit var app: Context
     private var lastError = ""
     private var initialized = false
+    private var backupTreeUri: Uri? = null
     private val levOptions = listOf(1,2,3,5,10,20,50,75,100)
 
     fun init(context: Context) = synchronized(lock) {
         if (initialized) return
         app = context.applicationContext
+        backupTreeUri = app.getSharedPreferences("backup_settings", Context.MODE_PRIVATE).getString("tree_uri", null)?.let { Uri.parse(it) }
         val primary = File(app.filesDir, "CryptoFutures")
         val external = app.getExternalFilesDir(null)?.let { File(it, "CryptoFutures") }
         primary.mkdirs(); external?.mkdirs()
@@ -303,6 +307,37 @@ object NativeTradingEngine {
     fun totalPnl() = snapshots().sumOf { it.pnl }
     fun lastError(): String = synchronized(lock) { lastError }
     fun storagePath(): String = synchronized(lock) { File(app.filesDir, "CryptoFutures").absolutePath }
+
+    fun setBackupFolder(uri: Uri): String = synchronized(lock) {
+        try {
+            app.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            backupTreeUri = uri
+            app.getSharedPreferences("backup_settings", Context.MODE_PRIVATE).edit().putString("tree_uri", uri.toString()).apply()
+            saveLocked()
+            "Carpeta seleccionada; respaldo automático activado."
+        } catch (e: Exception) { "No se pudo acceder a la carpeta: " + (e.message ?: "permiso denegado") }
+    }
+    fun backupFolderLabel(): String = if (backupTreeUri == null) "No seleccionada" else "Configurada · respaldo automático"
+    private fun saveUserBackup(root: JSONObject) {
+        val tree = backupTreeUri ?: return
+        try {
+            val resolver = app.contentResolver
+            fun child(parentId: String, name: String, mime: String): String? {
+                val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId)
+                resolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
+                    while (c.moveToNext()) if (c.getString(1) == name) return c.getString(0)
+                }
+                val parent = DocumentsContract.buildDocumentUriUsingTree(tree, parentId)
+                val created = DocumentsContract.createDocument(resolver, parent, mime, name) ?: return null
+                return DocumentsContract.getDocumentId(created)
+            }
+            val cf = child(DocumentsContract.getTreeDocumentId(tree), "CryptoFutures", DocumentsContract.Document.MIME_TYPE_DIR) ?: return
+            val backups = child(cf, "backups", DocumentsContract.Document.MIME_TYPE_DIR) ?: return
+            val file = child(backups, "state-v1.json", "application/json") ?: return
+            val uri = DocumentsContract.buildDocumentUriUsingTree(tree, file)
+            resolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(root.toString()) }
+        } catch (e: Exception) { lastError = "Respaldo externo: " + (e.message ?: "fallo de escritura") }
+    }
 
     fun tickAll() {
         if (!initialized) return
@@ -791,6 +826,7 @@ object NativeTradingEngine {
                     log.appendText("${System.currentTimeMillis()},$s,${b.optDouble("price")},${b.optDouble("balance")},${b.optString("side")},${b.optInt("trades")},${b.optInt("learned")}\n")
                 }
             }
+            saveUserBackup(root)
         } catch(e: Exception) { lastError="No se pudo guardar: ${e.message}".take(120) }
     }
 }
