@@ -9,8 +9,8 @@ android {
         applicationId 'com.joapetis.bitcoinfuturos'
         minSdk 26
         targetSdk 35
-        versionCode 3
-        versionName 'Alpha 0.1'
+        versionCode 4
+        versionName '0.2'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -19,4 +19,8 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+}
+
+dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
