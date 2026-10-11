@@ -104,7 +104,7 @@ class MainActivity : Activity() {
                 content.addView(text("‹   "+b.symbol.replace("-","/")+"     ★   ⋯",18f,Color.WHITE,true))
                 detailPrice=text(if(b.price>0)String.format(Locale.US,"%,.2f",b.price) else "Cargando precio…",27f,green,true); content.addView(detailPrice)
                 content.addView(text("Precio de mercado · intervalo 1H",11f,muted,false)); chart()
-                panel("Posiciones",b.position+"  ·  "+b.status); cardBlock("Balance del bot",money(b.balance)+"    P/L "+money(b.pnl))
+                panel("Estrategia independiente",NativeTradingEngine.strategyName(b.symbol)+"\n"+b.status); cardBlock("Balance del bot",money(b.balance)+"    P/L "+money(b.pnl))
                 cardBlock("Operación actual","Entrada "+(if(b.entry>0)String.format(Locale.US,"%.5f",b.entry)else "—")+"    ·    "+b.trades+" cierres")
                 controls(b.symbol,b.risk,b.leverage); actionButton("Volver a mercados"){page="Mercados";render()}
             }
@@ -116,7 +116,7 @@ class MainActivity : Activity() {
             }
             "Historial" -> {
                 panel("Historial","Operaciones simuladas y aprendizaje")
-                bots.forEach{cardBlock(it.symbol,it.trades.toString()+" cierres · "+it.wins+" aciertos\nBalance "+money(it.balance)+" · P/L "+money(it.pnl)+" · Aprendizaje "+it.learned)}
+                bots.forEach{cardBlock(it.symbol+" · "+NativeTradingEngine.strategyName(it.symbol),it.trades.toString()+" cierres · "+it.wins+" aciertos\nBalance "+money(it.balance)+" · P/L "+money(it.pnl)+" · Aprendizaje "+it.learned)}
                 content.addView(text("Datos guardados en: "+NativeTradingEngine.storagePath(),10f,muted,false)); content.addView(text(NativeTradingEngine.lastError(),12f,Color.YELLOW,false))
             }
             "Ajustes" -> {
