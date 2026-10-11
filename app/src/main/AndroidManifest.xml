@@ -8,7 +8,8 @@
         android:label="Crypto Futures Alpha 0.1"
         android:icon="@drawable/ic_crypto_futures"
         android:roundIcon="@drawable/ic_crypto_futures"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="false"
+        android:allowBackup="true">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -23,7 +24,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Mantener activa la sesión del simulador de trading y publicar el resumen de resultados elegido por el usuario."/>
+                android:value="Ejecutar simulaciones locales de trading y aprendizaje en primer plano a petición del usuario, con notificación persistente."/>
         </service>
     </application>
 </manifest>
