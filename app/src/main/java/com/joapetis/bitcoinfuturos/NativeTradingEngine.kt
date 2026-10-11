@@ -452,7 +452,7 @@ object NativeTradingEngine {
             b.put("lastSignal", "$strategy · $regime · RSI ${rsi.toInt()} · Señal $signal")
             val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
             if (newCandle) b.put("lastCandle", prevCandleTime)
-            val adaptiveBar = chooseBotTimeframe(closes, highs, lows, ema9, ema21, ema50, ema200, atr, close)
+            val adaptiveBar = "5m" // El vídeo se centra en scalping y confirmación en 5 minutos
             if (adaptiveBar != chosenBar) {
                 b.put("botBar", adaptiveBar).put("lastCandle", 0L)
                 b.put("lastSignal", strategy + " · temporalidad adaptativa " + chosenBar + " → " + adaptiveBar)
@@ -531,8 +531,8 @@ object NativeTradingEngine {
                 }
             } else if (side == "FLAT" && newCandle && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
                 val riskCash = b.optDouble("balance") * b.optDouble("risk",5.0)/100.0
-                val stopDistance = max(atr*1.8, close*0.001)
-                val targetDistance = atr*2.7
+                val stopDistance = max(atr*1.4, close*0.0008)
+                val targetDistance = atr*2.4
                 val estimatedRoundTripCostRate = 2.0 * (TAKER_FEE_RATE + SLIPPAGE_RATE) + FUNDING_RATE_PER_8H
                 val expectedMoveRate = targetDistance / close
                 val predictedWin = predictedWinProbability(b, features)
@@ -578,106 +578,91 @@ object NativeTradingEngine {
     }
 
     // Cada símbolo tiene una familia de señales propia; no se comparte un score genérico.
-    fun strategyName(symbol: String): String = when(symbol) {
-        "BTC-USDT" -> "Tendencia EMA + breakout"
-        "ETH-USDT" -> "Cruce EMA + momentum RSI"
-        "SOL-USDT" -> "Ruptura de volatilidad ATR"
-        "XRP-USDT" -> "Reversión a la media"
-        "DOGE-USDT" -> "Impulso con filtro de volumen"
-        "BNB-USDT" -> "Retroceso en tendencia"
-        "LINK-USDT" -> "Ruptura Donchian"
-        "ADA-USDT" -> "Reversión Bollinger/RSI"
-        "AVAX-USDT" -> "Tendencia con filtro ATR"
-        "SUI-USDT" -> "Momentum multi-ventana"
-        else -> "Estrategia conservadora"
-    }
+    // Estrategia de scalping inspirada en el vídeo: estructura/fractalidad, impulso-pullback-continuación,
+    // giros por doble techo/suelo confirmado y filtro para no operar mercados sin estructura.
+    fun strategyName(symbol: String): String = "Scalping de estructura · continuación y giro"
 
     private fun strategySignal(
         symbol:String, candles:List<JSONArray>, closes:List<Double>, highs:List<Double>, lows:List<Double>,
         ema9:Double, ema21:Double, ema50:Double, ema200:Double, rsi:Double, atr:Double,
         regime:String, returns:Double
     ):String {
-        if(closes.size<60) return "FLAT"
-        val close=closes.last()
-        val prev=closes[closes.lastIndex-1]
-        val recentHigh=highs.takeLast(21).dropLast(1).maxOrNull() ?: close
-        val recentLow=lows.takeLast(21).dropLast(1).minOrNull() ?: close
-        val range=closes.takeLast(20)
-        val mean=range.average()
-        val sd=sqrt(range.sumOf{(it-mean)*(it-mean)}/range.size)
-        val upper=mean+2.0*sd
-        val lower=mean-2.0*sd
-        val volumes=candles.map{it.optDouble(5)}
-        val volNow=volumes.lastOrNull() ?: 0.0
-        val volAvg=volumes.takeLast(20).dropLast(1).average().takeIf{it>0} ?: volNow
-        val volRatio=if(volAvg>0) volNow/volAvg else 1.0
-        val atrPct=if(close>0) atr/close else 0.0
-        return when(symbol) {
-            // Trend + breakout, confirmation by longer EMA and RSI; no signal in flat markets.
-            "BTC-USDT" -> when {
-                close>recentHigh && ema50>ema200 && rsi in 52.0..72.0 -> "LONG"
-                close<recentLow && ema50<ema200 && rsi in 28.0..48.0 -> "SHORT"
-                else -> "FLAT"
-            }
-            // EMA cross direction with momentum confirmation.
-            "ETH-USDT" -> when {
-                ema9>ema21 && prev<=ema9 && returns>0.001 && rsi in 50.0..70.0 -> "LONG"
-                ema9<ema21 && prev>=ema9 && returns< -0.001 && rsi in 30.0..50.0 -> "SHORT"
-                else -> "FLAT"
-            }
-            // High-volatility breakout with ATR expansion.
-            "SOL-USDT" -> when {
-                close>recentHigh && atrPct>0.006 && volRatio>1.05 -> "LONG"
-                close<recentLow && atrPct>0.006 && volRatio>1.05 -> "SHORT"
-                else -> "FLAT"
-            }
-            // Range-only RSI reversal, deliberately blocked in a trend regime.
-            "XRP-USDT" -> if(regime=="RANGO") when {
-                rsi<27 && close<lower -> "LONG"
-                rsi>73 && close>upper -> "SHORT"
-                else -> "FLAT"
-            } else "FLAT"
-            // DOGE requires unusual volume and directional short-term impulse.
-            "DOGE-USDT" -> when {
-                volRatio>1.8 && returns>0.008 && ema9>ema21 && rsi in 52.0..78.0 -> "LONG"
-                volRatio>1.8 && returns< -0.008 && ema9<ema21 && rsi in 22.0..48.0 -> "SHORT"
-                else -> "FLAT"
-            }
-            // BNB enters a pullback only when the larger trend remains intact.
-            "BNB-USDT" -> when {
-                ema50>ema200 && close>ema50 && close<ema21 && rsi in 38.0..52.0 -> "LONG"
-                ema50<ema200 && close<ema50 && close>ema21 && rsi in 48.0..62.0 -> "SHORT"
-                else -> "FLAT"
-            }
-            // LINK uses a wider Donchian breakout window.
-            "LINK-USDT" -> {
-                val hi=highs.takeLast(56).dropLast(1).maxOrNull() ?: recentHigh
-                val lo=lows.takeLast(56).dropLast(1).minOrNull() ?: recentLow
-                when { close>hi && ema50>ema200 -> "LONG"; close<lo && ema50<ema200 -> "SHORT"; else -> "FLAT" }
-            }
-            // ADA uses Bollinger-style mean reversion with RSI confirmation.
-            "ADA-USDT" -> if(regime=="RANGO") when {
-                close<lower && rsi<32 -> "LONG"
-                close>upper && rsi>68 -> "SHORT"
-                else -> "FLAT"
-            } else "FLAT"
-            // AVAX only trades a clear trend and requires movement larger than noise.
-            "AVAX-USDT" -> when {
-                ema9>ema21 && ema21>ema50 && ema50>ema200 && returns>0.003 && atrPct>0.004 -> "LONG"
-                ema9<ema21 && ema21<ema50 && ema50<ema200 && returns< -0.003 && atrPct>0.004 -> "SHORT"
-                else -> "FLAT"
-            }
-            // SUI requires both 4h-ish and 12h momentum to agree with EMA direction.
-            "SUI-USDT" -> {
-                val m4=if(closes[closes.lastIndex-4]!=0.0) close/closes[closes.lastIndex-4]-1 else 0.0
-                when {
-                    m4>0.006 && returns>0.01 && ema9>ema21 && rsi in 55.0..78.0 -> "LONG"
-                    m4< -0.006 && returns< -0.01 && ema9<ema21 && rsi in 22.0..45.0 -> "SHORT"
-                    else -> "FLAT"
-                }
-            }
-            else -> "FLAT"
+        if (closes.size < 60 || candles.size < 60) return "FLAT"
+        val n = closes.lastIndex
+        val close = closes[n]
+        val prev = closes[n-1]
+        if (close <= 0.0 || atr <= 0.0) return "FLAT"
+
+        // Estructura local: niveles anteriores excluyen la vela actual para evitar look-ahead.
+        val highsPrev = highs.dropLast(1).takeLast(12)
+        val lowsPrev = lows.dropLast(1).takeLast(12)
+        if (highsPrev.size < 12 || lowsPrev.size < 12) return "FLAT"
+        val swingHigh = highsPrev.maxOrNull() ?: return "FLAT"
+        val swingLow = lowsPrev.minOrNull() ?: return "FLAT"
+        val recentHighs = highs.dropLast(1).takeLast(8)
+        val recentLows = lows.dropLast(1).takeLast(8)
+        val olderHighs = highs.dropLast(9).takeLast(8)
+        val olderLows = lows.dropLast(9).takeLast(8)
+        if (olderHighs.isEmpty() || olderLows.isEmpty()) return "FLAT"
+
+        val upStructure = (recentHighs.maxOrNull() ?: close) > (olderHighs.maxOrNull() ?: close) &&
+            (recentLows.minOrNull() ?: close) > (olderLows.minOrNull() ?: close)
+        val downStructure = (recentHighs.maxOrNull() ?: close) < (olderHighs.maxOrNull() ?: close) &&
+            (recentLows.minOrNull() ?: close) < (olderLows.minOrNull() ?: close)
+
+        val volumes = candles.map { it.optDouble(5) }
+        val volNow = volumes.lastOrNull() ?: 0.0
+        val volAvg = volumes.takeLast(21).dropLast(1).average().takeIf { it > 0.0 } ?: volNow
+        val volRatio = if (volAvg > 0.0) volNow / volAvg else 1.0
+        val atrPct = atr / close
+        val trendStrength = abs(ema9 - ema21) / close
+        val efficiency = directionalEfficiency(closes, 12)
+
+        // En un mercado lateral/desordenado no se fuerza una operación.
+        val structured = efficiency >= 0.20 && trendStrength >= 0.00025 && atrPct >= 0.00025
+        if (!structured) return "FLAT"
+
+        // 1) Continuación: impulso, retroceso hacia EMA9/EMA21 y cierre de vuelta a favor.
+        val priorMove = if (closes[n-4] > 0.0) close / closes[n-4] - 1.0 else 0.0
+        val bullishPullback = upStructure && ema9 > ema21 && ema21 > ema50 &&
+            lows.takeLast(3).minOrNull()!! <= ema21 + atr * 0.25 &&
+            close > ema9 && close > prev && priorMove > 0.0004 && rsi in 48.0..72.0
+        val bearishPullback = downStructure && ema9 < ema21 && ema21 < ema50 &&
+            highs.takeLast(3).maxOrNull()!! >= ema21 - atr * 0.25 &&
+            close < ema9 && close < prev && priorMove < -0.0004 && rsi in 28.0..52.0
+        if (bullishPullback && volRatio >= 0.65) return "LONG"
+        if (bearishPullback && volRatio >= 0.65) return "SHORT"
+
+        // 2) Ruptura de estructura solo si el cierre confirma y hay impulso/volumen.
+        if (close > swingHigh && ema9 > ema21 && ema21 > ema50 && rsi in 52.0..75.0 &&
+            (volRatio >= 1.05 || abs(returns) >= 0.0015)) return "LONG"
+        if (close < swingLow && ema9 < ema21 && ema21 < ema50 && rsi in 25.0..48.0 &&
+            (volRatio >= 1.05 || abs(returns) >= 0.0015)) return "SHORT"
+
+        // 3) Giro: doble suelo/techo aproximado y ruptura de la zona intermedia (neckline).
+        val patternWindow = 18
+        val ph = highs.dropLast(1).takeLast(patternWindow)
+        val pl = lows.dropLast(1).takeLast(patternWindow)
+        if (ph.size >= patternWindow && pl.size >= patternWindow) {
+            val minIndex = pl.indices.minByOrNull { pl[it] } ?: 0
+            val firstLow = pl[minIndex]
+            val secondLow = pl.drop(min(minIndex + 4, pl.size)).minOrNull() ?: firstLow
+            val lowTolerance = atr * 0.55
+            val necklineLong = ph.drop(min(minIndex + 1, ph.size)).takeLast(10).maxOrNull() ?: close
+            val doubleBottom = minIndex <= 8 && secondLow > 0.0 &&
+                abs(firstLow - secondLow) <= lowTolerance && close > necklineLong &&
+                close > ema9 && rsi in 38.0..62.0
+            if (doubleBottom && close > prev) return "LONG"
+
+            val maxIndex = ph.indices.maxByOrNull { ph[it] } ?: 0
+            val firstHigh = ph[maxIndex]
+            val secondHigh = ph.drop(min(maxIndex + 4, ph.size)).maxOrNull() ?: firstHigh
+            val necklineShort = pl.drop(min(maxIndex + 1, pl.size)).takeLast(10).minOrNull() ?: close
+            val doubleTop = maxIndex <= 8 && abs(firstHigh - secondHigh) <= lowTolerance &&
+                close < necklineShort && close < ema9 && rsi in 38.0..62.0
+            if (doubleTop && close < prev) return "SHORT"
         }
+        return "FLAT"
     }
 
     private fun returnOver(closes: List<Double>, bars: Int): Double {
