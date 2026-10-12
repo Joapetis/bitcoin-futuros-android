@@ -564,6 +564,19 @@ object NativeTradingEngine {
                             b.put("learned", learnedBefore).put("lastBatchTrained", sampleCount / 10)
                         }
                     }
+                    val maxFavorablePrice = b.optDouble("maxFavorablePrice", entry)
+                    val maxAdversePrice = b.optDouble("maxAdversePrice", entry)
+                    val maxFavorablePnl = (if (side == "LONG") maxFavorablePrice - entry else entry - maxFavorablePrice) * qty
+                    val maxAdversePnl = min(0.0, (if (side == "LONG") maxAdversePrice - entry else entry - maxAdversePrice) * qty)
+                    val trailWasActive = b.optBoolean("trailingActive", false)
+                    val oldTrailAtr = b.optDouble("exitTrailAtr", 1.8)
+                    val updatedTrailAtr = when {
+                        trailWasActive && net > 0.0 && maxFavorablePnl > 0.0 && net / maxFavorablePnl < 0.55 -> oldTrailAtr - 0.08
+                        trailWasActive && net <= 0.0 && maxFavorablePnl > fee -> oldTrailAtr - 0.05
+                        trailWasActive && net > 0.0 && maxFavorablePnl > 0.0 && net / maxFavorablePnl > 0.80 -> oldTrailAtr + 0.04
+                        else -> oldTrailAtr
+                    }.coerceIn(1.5, 2.2)
+                    b.put("exitTrailAtr", updatedTrailAtr)
                     val h = b.optJSONArray("history") ?: JSONArray()
                     val entryTime = b.optLong("entryTime", System.currentTimeMillis())
                     h.put(JSONObject()
@@ -577,9 +590,9 @@ object NativeTradingEngine {
                         .put("predictedWin", b.optDouble("entryPredictedWin", 0.5))
                         .put("durationMs", max(0L, System.currentTimeMillis() - entryTime))
                         .put("reason", if(stopHit) "Stop ATR" else if(targetHit) "Objetivo ATR" else "Señal contraria")
-                        .put("modelSamples", b.optInt("learned", 0)))
+                        .put("modelSamples", b.optInt("learned", 0)).put("maxFavorablePnl", maxFavorablePnl).put("maxAdversePnl", maxAdversePnl).put("trailingActive", trailWasActive).put("exitTrailAtrAfter", updatedTrailAtr))
                     b.put("history",h).put("side","FLAT").put("entry",0.0).put("qty",0.0).put("stop",0.0).put("target",0.0)
-                        .put("entryFeatures", JSONArray()).put("trades",b.optInt("trades")+1)
+                        .put("entryFeatures", JSONArray()).put("trailingActive", false).put("trades",b.optInt("trades")+1)
                     if (balanceAfter <= 0.000001) {
                         val refill = max(1.0, b.optDouble("initial", 100.0))
                         b.put("balance", refill).put("injectedCapital", b.optDouble("injectedCapital", 0.0) + refill)
