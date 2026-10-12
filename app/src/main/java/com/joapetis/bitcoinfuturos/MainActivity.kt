@@ -331,7 +331,7 @@ class MainActivity : Activity() {
                 parent.removeAllViews()
                 if (activity.isEmpty()) parent.addView(text("Todavía no hay movimientos registrados. Al llegar los datos públicos de mercado aparecerán aquí las decisiones de los diez expertos.", 12f, muted, false))
                 activity.forEach { event ->
-                    val time = java.text.SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault()).format(java.util.Date(event.optLong("time")))
+                    val time = java.text.SimpleDateFormat("HH:mm:ss · dd/MM/yyyy", Locale.getDefault()).format(java.util.Date(event.optLong("time")))
                     val type = event.optString("type", "EVENTO")
                     val color = when(type) { "APERTURA" -> green; "CIERRE", "CIERRE MANUAL" -> if (event.optDouble("pnl", 0.0) >= 0) green else Color.rgb(255,77,90); "PROTECCIÓN" -> blue; "FILTRO" -> Color.YELLOW; else -> Color.WHITE }
                     val cardView = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), dp(7), dp(10), dp(7)); setBackgroundColor(card) }
