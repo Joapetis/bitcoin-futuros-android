@@ -329,12 +329,13 @@ object NativeTradingEngine {
             val heldMs = max(0L, now - b.optLong("entryTime", now))
             val funding = entry * qty * FUNDING_RATE_PER_8H * (heldMs / 28_800_000.0)
             val net = gross - fees - funding
+            recordExpertActivityLocked(b, "CIERRE MANUAL", "Parada del usuario · neto estimado " + String.format(Locale.US, "%+.2f", net) + " USDT", exit, net)
             val before = b.optDouble("balance", 100.0)
             val after = max(0.0, before + net)
             b.put("balance", after)
             val history = b.optJSONArray("history") ?: JSONArray()
             history.put(JSONObject().put("type","TRADE").put("time",now).put("entryTime",b.optLong("entryTime",now)).put("side",side).put("entry",entry).put("exit",exit).put("qty",qty).put("gross",gross).put("fees",fees).put("funding",funding).put("pnl",net).put("balanceBefore",before).put("balanceAfter",after).put("reason","Parada de emergencia").put("strategy",b.optString("entryStrategy","")).put("timeframe",b.optString("botBar","5m")).put("durationMs",heldMs))
-            b.put("history",history).put("side","FLAT").put("entry",0.0).put("qty",0.0).put("stop",0.0).put("target",0.0).put("entryFeatures",JSONArray()).put("trades",b.optInt("trades",0)+1)
+            b.put("history",history).put("side","FLAT").put("entry",0.0).put("qty",0.0).put("stop",0.0).put("target",0.0).put("entryFeatures",JSONArray()).put("entryExpertFeatures",JSONArray()).put("trailingActive", false).put("trades",b.optInt("trades",0)+1)
             if (net > 0) b.put("wins",b.optInt("wins",0)+1) else b.put("losses",b.optInt("losses",0)+1)
             totalNet += net
         }
@@ -534,7 +535,10 @@ object NativeTradingEngine {
             b.put("newsSentiment", news.sentiment).put("newsUpdatedAt", news.updatedAt)
             // Observation only: RSS context never changes the BTC entry signal.
             b.put("expertDirection", cooperative.direction).put("expertConsensusDetail", cooperative.detail)
-            b.put("lastSignal", "$strategy · estrategia base v0.5: $signal · expertos ${cooperative.direction} · $regime · RSI ${rsi.toInt()} · $newsLabel")
+            val newStatus = "$strategy · estrategia base v0.5: $signal · expertos ${cooperative.direction} · $regime · RSI ${rsi.toInt()} · $newsLabel"
+            val oldStatus = b.optString("lastSignal", "")
+            b.put("lastSignal", newStatus)
+            if (newStatus != oldStatus) recordExpertActivityLocked(b, "ANÁLISIS", "Base=$signal · consenso=${cooperative.direction} · ${cooperative.detail}", close)
             val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
             if (newCandle) b.put("lastCandle", prevCandleTime)
             val adaptiveBar = chooseBotTimeframe(closes, highs, lows, ema9, ema21, ema50, ema200, atr, close)
@@ -566,6 +570,7 @@ object NativeTradingEngine {
                         val tightened = if (side == "LONG") max(priorStop, candidate) else min(priorStop, candidate)
                         if ((side == "LONG" && tightened > priorStop) || (side == "SHORT" && tightened < priorStop)) {
                             b.put("stop", tightened).put("trailingActive", true)
+                            recordExpertActivityLocked(b, "PROTECCIÓN", "Stop dinámico avanzado a " + String.format(Locale.US, "%.2f", tightened) + " · trailing activo", markNow)
                         }
                     }
                 }
@@ -682,9 +687,12 @@ object NativeTradingEngine {
                         .put("entryTime", System.currentTimeMillis()).put("entryStrategy", strategy)
                         .put("maxFavorablePrice", executedEntry).put("maxAdversePrice", executedEntry)
                         .put("trailingActive", false).put("entryAtr", atr)
-                        .put("entryPredictedWin", predictedWin).put("entryFeatures", JSONArray().also { arr -> features.forEach { arr.put(it) } })
+                        .put("entryPredictedWin", predictedWin)
+                        .put("entryFeatures", JSONArray().also { arr -> features.forEach { arr.put(it) } })
+                        .put("entryExpertFeatures", JSONArray().also { outer -> cooperative.expertFeatures.forEach { fs -> outer.put(JSONArray().also { inner -> fs.forEach { inner.put(it) } }) } })
+                    recordExpertActivityLocked(b, "APERTURA", "Entrada $signal · estrategia base v0.5 · diez expertos comparten una sola posición; consenso=${cooperative.direction}", executedEntry)
                 } else {
-                    b.put("lastSignal", "$strategy · Entrada filtrada por costes/IA (${(predictedWin*100).toInt()}%)")
+                    b.put("lastSignal", "$strategy · Señal base $signal, entrada filtrada por costes/IA (${(predictedWin*100).toInt()}%)"); recordExpertActivityLocked(b, "FILTRO", "Señal base $signal no ejecutada: costesCubiertos=$costsCovered · probabilidad estimada=${(predictedWin*100).toInt()}%", close)
                 }
             }
         }
