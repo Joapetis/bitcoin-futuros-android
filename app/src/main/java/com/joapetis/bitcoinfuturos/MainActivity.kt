@@ -100,6 +100,34 @@ class MainActivity : Activity() {
         when(page) {
             "Inicio" -> {
                 overviewCard(pnl, bots.sumOf{it.equity})
+                val emergency = Button(this).apply {
+                    text = "■  PARAR TODO Y CERRAR POSICIONES"
+                    isAllCaps = false
+                    textSize = 13f
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(Color.rgb(190, 35, 48))
+                    setOnClickListener {
+                        val estimate = NativeTradingEngine.estimateNetIfClosedNow()
+                        android.app.AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Parada de emergencia")
+                            .setMessage("Resultado neto estimado al cerrar ahora: " + String.format(Locale.US, "%+.2f USDT", estimate) +
+                                "\n\nSe estiman comisiones taker, deslizamiento adverso y financiación. El resultado final puede variar. Si continúas, se cerrarán las posiciones simuladas y se desactivarán todos los bots.")
+                            .setNegativeButton("Cancelar", null)
+                            .setPositiveButton("Cerrar y detener") { _, _ ->
+                                val result = NativeTradingEngine.stopAllAndCloseNow()
+                                updateScreen()
+                                android.app.AlertDialog.Builder(this@MainActivity)
+                                    .setTitle("Bots detenidos")
+                                    .setMessage("Resultado neto total registrado: " + String.format(Locale.US, "%+.2f USDT", result))
+                                    .setPositiveButton("Aceptar", null)
+                                    .show()
+                            }
+                            .show()
+                    }
+                }
+                content.addView(emergency, LinearLayout.LayoutParams(-1, -2).apply {
+                    setMargins(0, dp(2), 0, dp(10))
+                })
                 val best=bots.maxByOrNull{it.pnl}
                 bestCard(best?.symbol ?: "BTC-USDT", best?.pnl ?: 0.0)
                 val stats=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
