@@ -108,6 +108,16 @@ object NativeTradingEngine {
     }
 
     fun isBotEnabled(symbol: String): Boolean = synchronized(lock) { bots[symbol]?.optBoolean("enabled", symbol != "SUI-USDT") ?: false }
+    fun isRunning(): Boolean = synchronized(lock) {
+        bots["BTC-USDT"]?.optBoolean("enabled", true) == true
+    }
+
+    fun resumeAll() = synchronized(lock) {
+        val btc = bots["BTC-USDT"] ?: return@synchronized
+        btc.put("enabled", true)
+        btc.put("lastSignal", "Reanudado · motor cooperativo BTC")
+        saveLocked()
+    }
     fun setBotEnabled(symbol: String, enabled: Boolean) = synchronized(lock) {
         bots[symbol]?.put("enabled", enabled)
         saveLocked()
