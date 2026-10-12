@@ -271,7 +271,7 @@ class MainActivity : Activity() {
                 panel("Bots activos","Activa solo los bots que quieras permitir operar. SUI se inicia desactivado por sus pérdidas observadas.")
                 cardBlock("Mercado activo", "BTC/USDT · diez expertos cooperativos · una única posición compartida")
                 cardBlock("Simulación en segundo plano","Mantiene activos los bots mediante el servicio Android")
-                cardBlock("Comisiones Binance USDⓈ-M Futures · usuario estándar","Modelo de simulación VIP 0: taker 0,05% por lado en órdenes de mercado y maker 0,02% por lado en órdenes límite que aportan liquidez. El bot simula entradas y salidas como taker. Deslizamiento supuesto aparte: 0,02% por lado; financiación estimada: 0,01% cada 8 h, variable según contrato y momento. Binance puede aplicar descuentos/promociones y las tarifas pueden cambiar; estas son las tasas estándar de referencia, no una consulta de tu cuenta.")
+                cardBlock("Supuestos de costes de futuros simulados","Supuesto de simulación: comisión taker 0,05% por lado, maker 0,02% por lado como referencia, deslizamiento 0,02% por lado y financiación estimada 0,01% cada 8 h. Las tasas reales dependen del mercado y pueden variar.")
                 cardBlock("IA neuronal local adaptativa","Red neuronal multicapa 12-10-1: tendencia, momentum en tres ventanas, volatilidad ATR, volumen relativo, RSI, alineación EMA, eficiencia direccional, cuerpo de vela y tendencia larga. Se ejecuta en el móvil y conserva sus pesos por bot. Modelo experimental; no garantiza rentabilidad.")
                 cardBlock("General","Modo oscuro · Español\nDatos públicos de mercado · Sin claves privadas\nSolo simulación: no se envían órdenes reales. La viabilidad debe comprobarse con backtesting temporal y paper trading.")
                 panel("Respaldos entre versiones","Guarda el aprendizaje, saldos simulados e historial fuera de los datos privados de la app.")
@@ -388,6 +388,7 @@ class MainActivity : Activity() {
             }
         }
         v.layoutParams=LinearLayout.LayoutParams(-1,dp(260))
+        liveChart = v
         content.addView(v)
         content.addView(text("● Alcista     ● Bajista                 VOLUMEN · VELAS "+chartBar,10f,muted,false))
     }
