@@ -547,7 +547,7 @@ object NativeTradingEngine {
             b.put("lastSignal", "$strategy · $regime · RSI ${rsi.toInt()} · Señal $signal")
             val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
             if (newCandle) b.put("lastCandle", prevCandleTime)
-            val adaptiveBar = "5m" // Temporalidad de scalping
+            val adaptiveBar = chooseBotTimeframe(closes, highs, lows, ema9, ema21, ema50, ema200, atr, close)
             if (adaptiveBar != chosenBar) {
                 b.put("botBar", adaptiveBar).put("lastCandle", 0L)
                 b.put("lastSignal", strategy + " · temporalidad adaptativa " + chosenBar + " → " + adaptiveBar)
