@@ -523,7 +523,10 @@ object NativeTradingEngine {
                 val candleLow = lows.last()
                 // Ignore the pre-entry part of this hourly candle to avoid look-ahead exits.
                 val afterEntryCandle = prevCandleTime > b.optLong("entryCandle", prevCandleTime)
-                val stopHit = afterEntryCandle && (if (side == "LONG") candleLow <= stop else candleHigh >= stop)
+                // A live quote crossing the stop can close the simulated position immediately;
+                // candle extrema remain a fallback for gaps/missed quote updates.
+                val liveStopHit = if (side == "LONG") markNow <= stop else markNow >= stop
+                val stopHit = liveStopHit || (afterEntryCandle && (if (side == "LONG") candleLow <= stop else candleHigh >= stop))
                 val targetHit = afterEntryCandle && (if (side == "LONG") candleHigh >= target else candleLow <= target)
                 if (stopHit || targetHit || (newCandle && signal != "FLAT" && signal != side)) {
                     val rawExit = if (stopHit) stop else if (targetHit) target else close
