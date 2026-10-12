@@ -527,8 +527,12 @@ object NativeTradingEngine {
                 ((ema50 - ema200) / close * 100.0).coerceIn(-3.0, 3.0))
             val strategy = strategyName(symbol)
             val baseSignal = strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200, rsi, atr, regime, returns)
-            // Keep the v0.5 signal and entry cadence intact: ensemble disagreement is never an entry veto.
-            val signal = baseSignal
+            // Prefer the proven v0.5 signal. If it is neutral, allow a strong 10-agent consensus to propose a shared BTC entry.
+            val signal = when {
+                baseSignal == "LONG" || baseSignal == "SHORT" -> baseSignal
+                cooperative.direction == "LONG" || cooperative.direction == "SHORT" -> cooperative.direction
+                else -> "FLAT"
+            }
             b.put("strategy", strategy)
             val news = NewsIntelligence.summary()
             val newsLabel = if (news.articles == 0) "RSS pendiente" else "RSS ${if (news.sentiment > 0.15) "positivo" else if (news.sentiment < -0.15) "negativo" else "neutro"} ${news.articles}"
@@ -537,7 +541,7 @@ object NativeTradingEngine {
             val previousExpertDetail = b.optString("expertConsensusDetail", "")
             b.put("expertDirection", cooperative.direction).put("expertConsensusDetail", cooperative.detail)
             if (cooperative.detail != previousExpertDetail) recordExpertActivityLocked(b, "VOTOS", cooperative.detail, close)
-            val newStatus = "$strategy · estrategia base v0.5: $signal · expertos ${cooperative.direction} · $regime · RSI ${rsi.toInt()} · $newsLabel"
+            val newStatus = "$strategy · base v0.5=$baseSignal · señal conjunta=$signal · expertos ${cooperative.direction} · $regime · RSI ${rsi.toInt()} · $newsLabel"
             val oldStatus = b.optString("lastSignal", "")
             b.put("lastSignal", newStatus)
             if (newStatus != oldStatus) recordExpertActivityLocked(b, "ANÁLISIS", "Base=$signal · consenso=${cooperative.direction} · $regime · RSI ${rsi.toInt()}", close)
@@ -676,7 +680,7 @@ object NativeTradingEngine {
                             .put("balanceAfter", refill).put("pnl", 0.0))
                     }
                 }
-            } else if (side == "FLAT" && b.optBoolean("enabled", symbol != "SUI-USDT") && newCandle && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
+            } else if (side == "FLAT" && b.optBoolean("enabled", symbol != "SUI-USDT") && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
                 // Parallel positions use a separate share of the common portfolio per enabled bot.
                 val allocatedCapital = sharedCapitalLocked()
                 val riskCash = allocatedCapital * b.optDouble("risk",5.0)/100.0
@@ -684,7 +688,7 @@ object NativeTradingEngine {
                 val targetDistance = atr*2.7
                 val estimatedRoundTripCostRate = 2.0 * (TAKER_FEE_RATE + SLIPPAGE_RATE) + FUNDING_RATE_PER_8H
                 val expectedMoveRate = targetDistance / close
-                val predictedWin = predictedWinProbability(b, features)
+                val predictedWin = predictedWinProbability(b, features, cooperative.expertFeatures)
                 val sampleCount = b.optInt("learned", 0)
                 // Avoid trades whose target cannot reasonably cover fees/slippage/funding.
                 // Once enough closes exist, the on-device online learner can veto weak setups.
@@ -979,18 +983,18 @@ object NativeTradingEngine {
         return hidden to sigmoid(out)
     }
 
-    private fun predictedWinProbability(b: JSONObject, features: DoubleArray): Double {
+    private fun predictedWinProbability(b: JSONObject, features: DoubleArray, expertFeatures: List<DoubleArray>): Double {
         var total = 0.0
         for (expert in 0 until 10) {
+            val ownFeatures = expertFeatures.getOrNull(expert)?.takeIf { it.size == 12 } ?: features
             val suffix = if (expert == 0) "" else "Expert$expert"
             val w1 = modelWeights(b, "mlpV2W1$suffix", 120, 0.08)
             val w2 = modelWeights(b, "mlpV2W2$suffix", 11, 0.08)
-            total += forward(features, w1, w2).second
+            total += forward(ownFeatures, w1, w2).second
         }
         return (total / 10.0).coerceIn(0.0, 1.0)
     }
 
-    // Ten independently weighted experts train on every shared BTC outcome.
     private fun learn(b: JSONObject, won: Boolean, features: DoubleArray) {
         learnExperts(b, won, List(10) { features })
     }
