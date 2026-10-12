@@ -485,7 +485,8 @@ object NativeTradingEngine {
                     val barsHeld = max(1L, (prevCandleTime - b.optLong("entryCandle", prevCandleTime)) / when (chosenBar) { "15m" -> 900_000L; "4H" -> 14_400_000L; "1D" -> 86_400_000L; else -> HOUR_MS })
                     val funding = entryNotional * FUNDING_RATE_PER_8H * (barsHeld / 8.0)
                     val net = gross - fee - funding
-                    val balanceBefore = b.optDouble("balance")\n                    val portfolioBefore = sharedCapitalLocked()
+                    val balanceBefore = b.optDouble("balance")
+                    val portfolioBefore = sharedCapitalLocked()
                     val balanceAfter = max(0.0, balanceBefore + net)
                     b.put("balance", balanceAfter)
                     if (net > 0) b.put("wins", b.optInt("wins")+1) else b.put("losses", b.optInt("losses")+1)
