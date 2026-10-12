@@ -32,7 +32,7 @@ class MainActivity : Activity() {
     private val sparklineViews = mutableListOf<View>()
     private var page="Inicio"; private var selected="BTC-USDT"; private var chartBar="1H"
     private val backupPicker=4102
-    private val symbols=listOf("BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","DOGE-USDT","BNB-USDT","LINK-USDT","ADA-USDT","AVAX-USDT","SUI-USDT")
+    private val symbols=listOf("BTC-USDT")
     private fun dp(value:Int):Int = (value * resources.displayMetrics.density + 0.5f).toInt()
     private fun money(v:Double)=String.format(Locale.US,"%,.2f USDT",v)
 
@@ -112,29 +112,36 @@ class MainActivity : Activity() {
         when(page) {
             "Inicio" -> {
                 overviewCard(pnl, bots.sumOf{it.equity})
+                val running = NativeTradingEngine.isRunning()
                 val emergency = Button(this).apply {
-                    text = "■  PARAR TODO Y CERRAR POSICIONES"
+                    text = if (running) "■  PARAR OPERACIONES Y CERRAR" else "▶  REANUDAR OPERACIONES"
                     isAllCaps = false
                     textSize = 13f
                     setTextColor(Color.WHITE)
-                    setBackgroundColor(Color.rgb(190, 35, 48))
+                    setBackgroundColor(if (running) Color.rgb(190, 35, 48) else Color.rgb(0, 130, 90))
                     setOnClickListener {
-                        val estimate = NativeTradingEngine.estimateNetIfClosedNow()
-                        android.app.AlertDialog.Builder(this@MainActivity)
-                            .setTitle("Parada de emergencia")
-                            .setMessage("Resultado neto estimado al cerrar ahora: " + String.format(Locale.US, "%+.2f USDT", estimate) +
-                                "\n\nSe estiman comisiones taker, deslizamiento adverso y financiación. El resultado final puede variar. Si continúas, se cerrarán las posiciones simuladas y se desactivarán todos los bots.")
-                            .setNegativeButton("Cancelar", null)
-                            .setPositiveButton("Cerrar y detener") { _, _ ->
-                                val result = NativeTradingEngine.stopAllAndCloseNow()
-                                updateScreen()
-                                android.app.AlertDialog.Builder(this@MainActivity)
-                                    .setTitle("Bots detenidos")
-                                    .setMessage("Resultado neto total registrado: " + String.format(Locale.US, "%+.2f USDT", result))
-                                    .setPositiveButton("Aceptar", null)
-                                    .show()
-                            }
-                            .show()
+                        if (!NativeTradingEngine.isRunning()) {
+                            NativeTradingEngine.resumeAll()
+                            updateScreen()
+                            Toast.makeText(this@MainActivity, "Simulación reanudada", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val estimate = NativeTradingEngine.estimateNetIfClosedNow()
+                            android.app.AlertDialog.Builder(this@MainActivity)
+                                .setTitle("Pausar operaciones")
+                                .setMessage("Resultado neto estimado al cerrar ahora: " + String.format(Locale.US, "%+.2f USDT", estimate) +
+                                    "\n\nSe cerrará la posición simulada actual, se registrará su resultado estimado y se pausarán las nuevas entradas. Podrás reanudar desde este mismo botón.")
+                                .setNegativeButton("Cancelar", null)
+                                .setPositiveButton("Cerrar y pausar") { _, _ ->
+                                    val result = NativeTradingEngine.stopAllAndCloseNow()
+                                    updateScreen()
+                                    android.app.AlertDialog.Builder(this@MainActivity)
+                                        .setTitle("Operaciones pausadas")
+                                        .setMessage("Resultado neto registrado: " + String.format(Locale.US, "%+.2f USDT", result) + "\nPulsa «Reanudar operaciones» para continuar.")
+                                        .setPositiveButton("Aceptar", null)
+                                        .show()
+                                }
+                                .show()
+                        }
                     }
                 }
                 content.addView(emergency, LinearLayout.LayoutParams(-1, -2).apply {
@@ -143,22 +150,47 @@ class MainActivity : Activity() {
                 val best=bots.maxByOrNull{it.pnl}
                 bestCard(best?.symbol ?: "BTC-USDT", best?.pnl ?: 0.0)
                 val stats=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
-                listOf(bots.size.toString()+"|Bots activos",bots.count{it.pnl>0}.toString()+"|Ganadores",bots.count{it.pnl<0}.toString()+"|Perdedores").forEachIndexed{i,s0->
+                listOf("10|Expertos cooperativos",bots.count{it.pnl>0}.toString()+"|Resultado positivo",bots.count{it.pnl<0}.toString()+"|Resultado negativo").forEachIndexed{i,s0->
                     val parts=s0.split("|"); val c=if(i==1)green else if(i==2)Color.rgb(255,64,75) else Color.WHITE
                     val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(10),dp(10),dp(6),dp(10));setBackgroundColor(card);addView(text(parts[0],20f,c,true));addView(text(parts[1],10f,muted,false))}
                     stats.addView(box,LinearLayout.LayoutParams(0,-2,1f).apply{setMargins(dp(2),dp(4),dp(2),dp(4))})
                 }
                 content.addView(stats)
-                panel("Mercados","Toca una criptomoneda para abrir su ficha")
-                bots.take(5).forEach{marketRow(it)}
-                actionButton("Ver todos los mercados"){page="Mercados";render()}
+                panel("Mercado único","Bitcoin · los diez expertos cooperan sobre BTC/USDT")
+                bots.forEach{marketRow(it)}
+                actionButton("Ver gráfico de Bitcoin"){page="Mercados";render()}
             }
             "Mercados" -> {
-                panel("Mercados","Todo     Futuros     Top     DeFi     Memes")
-                val search=EditText(this).apply{hint="Buscar criptomoneda…";setHintTextColor(muted);setTextColor(Color.WHITE);textSize=14f;setSingleLine();setPadding(dp(14),dp(8),dp(14),dp(8));setBackgroundColor(card)}
-                content.addView(search); val list=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}; content.addView(list)
-                fun fill(q:String){list.removeAllViews();bots.filter{it.symbol.contains(q,true)}.forEach{marketRow(it,list)}}
-                fill(""); search.addTextChangedListener(object:android.text.TextWatcher{override fun beforeTextChanged(s:CharSequence?,st:Int,c:Int,a:Int){};override fun onTextChanged(s:CharSequence?,st:Int,b:Int,c:Int){fill(s.toString())};override fun afterTextChanged(s:android.text.Editable?){}})
+                val btc = bots.firstOrNull { it.symbol == "BTC-USDT" } ?: bots.first()
+                panel("Bitcoin · BTC/USDT", "Mercado único de la simulación · datos públicos de futuros")
+                detailPrice = text(if (btc.price > 0) String.format(Locale.US, "%,.2f USDT", btc.price) else "Esperando precio…", 23f, green, true)
+                content.addView(detailPrice)
+                content.addView(text("Gráfico de Bitcoin", 12f, muted, false))
+                val intervalRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                intervalRow.addView(text("Temporalidad del gráfico", 12f, Color.WHITE, true), LinearLayout.LayoutParams(0, -2, 1f))
+                val intervalSpinner = Spinner(this)
+                val intervals = listOf("1m", "5m", "15m", "1H", "4H", "1D")
+                intervalSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, intervals)
+                intervalSpinner.setSelection(intervals.indexOf(chartBar).coerceAtLeast(0))
+                intervalSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                    override fun onNothingSelected(p: AdapterView<*>?) {}
+                    override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                        val next = intervals[pos]
+                        if (chartBar != next) {
+                            chartBar = next
+                            liveChart?.invalidate()
+                            NativeTradingEngine.requestChartCandles("BTC-USDT", chartBar) { handler.post { liveChart?.invalidate() } }
+                        }
+                    }
+                }
+                intervalRow.addView(intervalSpinner, LinearLayout.LayoutParams(dp(112), dp(42)))
+                content.addView(intervalRow)
+                liveChart = null
+                selected = "BTC-USDT"
+                chart()
+                NativeTradingEngine.requestChartCandles("BTC-USDT", chartBar) { handler.post { liveChart?.invalidate() } }
+                cardBlock("Motor cooperativo de 10 expertos", "Una sola operación compartida sobre BTC. Los expertos aportan aprendizaje a un modelo común; ninguna operación se abre por separado por experto.")
+                cardBlock("Estado", if (NativeTradingEngine.isRunning()) "Operaciones activas" else "Operaciones pausadas · pulsa Reanudar en Inicio")
             }
             "Detalle" -> {
                 val b=bots.firstOrNull{it.symbol==selected}?:bots.first()
@@ -237,21 +269,8 @@ class MainActivity : Activity() {
                 cardBlock("Cartera compartida e interés compuesto",
                     "Los bots comparten el capital total y solo se permite una posición abierta a la vez. Cada resultado neto modifica el capital disponible para la siguiente operación. Riesgo configurado al 100% del capital compartido: puede perderse toda la cartera. Las comisiones se estiman como taker Binance VIP 0 (0,05% por lado), más deslizamiento y financiación estimados.")
                 panel("Bots activos","Activa solo los bots que quieras permitir operar. SUI se inicia desactivado por sus pérdidas observadas.")
-                symbols.forEach { sym ->
-                    val cb=CheckBox(this).apply {
-                        text=sym.replace("-","/") + if(sym=="AVAX-USDT") " · estrategia conservada" else ""
-                        setTextColor(Color.WHITE)
-                        buttonTintList=android.content.res.ColorStateList.valueOf(blue)
-                        isChecked=NativeTradingEngine.isBotEnabled(sym)
-                        setOnCheckedChangeListener { _, checked -> NativeTradingEngine.setBotEnabled(sym,checked) }
-                    }
-                    content.addView(cb)
-                }
+                cardBlock("Mercado activo", "BTC/USDT · diez expertos cooperativos · una única posición compartida")
                 cardBlock("Simulación en segundo plano","Mantiene activos los bots mediante el servicio Android")
-                content.addView(text("Bot a configurar",13f,Color.WHITE,true))
-                val spinner=Spinner(this); spinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,symbols); spinner.setSelection(symbols.indexOf(selected).coerceAtLeast(0))
-                spinner.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onNothingSelected(p:AdapterView<*>?){};override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){selected=symbols[pos]}}
-                content.addView(spinner); val b=bots.firstOrNull{it.symbol==selected}?:bots.first(); controls(b.symbol,b.risk,b.leverage)
                 cardBlock("Comisiones Binance USDⓈ-M Futures · usuario estándar","Modelo de simulación VIP 0: taker 0,05% por lado en órdenes de mercado y maker 0,02% por lado en órdenes límite que aportan liquidez. El bot simula entradas y salidas como taker. Deslizamiento supuesto aparte: 0,02% por lado; financiación estimada: 0,01% cada 8 h, variable según contrato y momento. Binance puede aplicar descuentos/promociones y las tarifas pueden cambiar; estas son las tasas estándar de referencia, no una consulta de tu cuenta.")
                 cardBlock("IA neuronal local adaptativa","Red neuronal multicapa 12-10-1: tendencia, momentum en tres ventanas, volatilidad ATR, volumen relativo, RSI, alineación EMA, eficiencia direccional, cuerpo de vela y tendencia larga. Se ejecuta en el móvil y conserva sus pesos por bot. Modelo experimental; no garantiza rentabilidad.")
                 cardBlock("General","Modo oscuro · Español\nDatos públicos de mercado · Sin claves privadas\nSolo simulación: no se envían órdenes reales. La viabilidad debe comprobarse con backtesting temporal y paper trading.")
