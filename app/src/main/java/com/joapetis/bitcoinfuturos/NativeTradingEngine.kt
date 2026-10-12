@@ -604,10 +604,15 @@ object NativeTradingEngine {
                     val entryFeaturesJson = b.optJSONArray("entryFeatures") ?: JSONArray()
                     val entryFeatures = DoubleArray(entryFeaturesJson.length()) { entryFeaturesJson.optDouble(it) }
                     if (entryFeatures.size == 12) {
-                        learn(b, net > 0, entryFeatures)
+                        val entryExpertJson = b.optJSONArray("entryExpertFeatures") ?: JSONArray()
+                        val expertFs = (0 until 10).map { expert ->
+                            val arr = entryExpertJson.optJSONArray(expert)
+                            if (arr != null && arr.length() == 12) DoubleArray(12) { arr.optDouble(it) } else entryFeatures
+                        }
+                        learnExperts(b, net > 0, expertFs)
                         val samples = b.optJSONArray("learningSamples") ?: JSONArray()
                         samples.put(JSONObject().put("won", net > 0).put("pnl", net).put("time", System.currentTimeMillis())
-                            .put("features", entryFeaturesJson).put("strategy", b.optString("entryStrategy", strategy)))
+                            .put("features", entryFeaturesJson).put("expertFeatures", entryExpertJson).put("strategy", b.optString("entryStrategy", strategy)))
                         b.put("learningSamples", samples)
                         val sampleCount = samples.length()
                         if (sampleCount >= 10 && sampleCount / 10 > b.optInt("lastBatchTrained", 0)) {
@@ -618,7 +623,13 @@ object NativeTradingEngine {
                                     val s = samples.optJSONObject(i) ?: continue
                                     val fs = s.optJSONArray("features") ?: continue
                                     if (fs.length() != 12) continue
-                                    learn(b, s.optBoolean("won"), DoubleArray(12) { fs.optDouble(it) })
+                                    val storedExpertFeatures = s.optJSONArray("expertFeatures") ?: JSONArray()
+                                    val replayFeatures = DoubleArray(12) { fs.optDouble(it) }
+                                    val replayExpertFs = (0 until 10).map { expert ->
+                                        val expertArray = storedExpertFeatures.optJSONArray(expert)
+                                        if (expertArray != null && expertArray.length() == 12) DoubleArray(12) { expertArray.optDouble(it) } else replayFeatures
+                                    }
+                                    learnExperts(b, s.optBoolean("won"), replayExpertFs)
                                 }
                             }
                             b.put("learned", learnedBefore).put("lastBatchTrained", sampleCount / 10)
@@ -637,6 +648,7 @@ object NativeTradingEngine {
                         else -> oldTrailAtr
                     }.coerceIn(1.5, 2.2)
                     b.put("exitTrailAtr", updatedTrailAtr)
+                    recordExpertActivityLocked(b, "CIERRE", "Cierre $side · " + (if (stopHit) "stop" else if (targetHit) "objetivo" else "señal contraria") + " · neto " + String.format(Locale.US, "%+.2f", net) + " USDT", exitPrice, net)
                     val h = b.optJSONArray("history") ?: JSONArray()
                     val entryTime = b.optLong("entryTime", System.currentTimeMillis())
                     h.put(JSONObject()
@@ -652,7 +664,7 @@ object NativeTradingEngine {
                         .put("reason", if(stopHit) "Stop ATR" else if(targetHit) "Objetivo ATR" else "Señal contraria")
                         .put("modelSamples", b.optInt("learned", 0)).put("maxFavorablePnl", maxFavorablePnl).put("maxAdversePnl", maxAdversePnl).put("trailingActive", trailWasActive).put("exitTrailAtrAfter", updatedTrailAtr))
                     b.put("history",h).put("side","FLAT").put("entry",0.0).put("qty",0.0).put("stop",0.0).put("target",0.0)
-                        .put("entryFeatures", JSONArray()).put("trailingActive", false).put("trades",b.optInt("trades")+1)
+                        .put("entryFeatures", JSONArray()).put("entryExpertFeatures", JSONArray()).put("trailingActive", false).put("trades",b.optInt("trades")+1)
                     if (balanceAfter <= 0.000001) {
                         val refill = max(1.0, b.optDouble("initial", 100.0))
                         b.put("balance", refill).put("injectedCapital", b.optDouble("injectedCapital", 0.0) + refill)
@@ -978,8 +990,13 @@ object NativeTradingEngine {
 
     // Ten independently weighted experts train on every shared BTC outcome.
     private fun learn(b: JSONObject, won: Boolean, features: DoubleArray) {
+        learnExperts(b, won, List(10) { features })
+    }
+
+    private fun learnExperts(b: JSONObject, won: Boolean, featuresByExpert: List<DoubleArray>) {
         val y = if (won) 1.0 else 0.0
         for (expert in 0 until 10) {
+            val features = featuresByExpert.getOrNull(expert)?.takeIf { it.size == 12 } ?: DoubleArray(12)
             val suffix = if (expert == 0) "" else "Expert$expert"
             val w1 = modelWeights(b, "mlpV2W1$suffix", 120, 0.08)
             val w2 = modelWeights(b, "mlpV2W2$suffix", 11, 0.08)
