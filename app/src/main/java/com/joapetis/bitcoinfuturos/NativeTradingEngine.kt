@@ -42,7 +42,8 @@ object NativeTradingEngine {
     private const val MIN_PREDICTED_WIN = 0.53
     private const val HOUR_MS = 3_600_000L
 
-    private val symbols = listOf("BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT", "BNB-USDT", "LINK-USDT", "ADA-USDT", "AVAX-USDT", "SUI-USDT")
+    private val legacySymbols = listOf("BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT", "BNB-USDT", "LINK-USDT", "ADA-USDT", "AVAX-USDT", "SUI-USDT")
+    private val symbols = listOf("BTC-USDT")
     private val lock = Any()
     private val bots = linkedMapOf<String, JSONObject>()
     private val candleCache = linkedMapOf<String, List<CandleSnapshot>>()
@@ -89,7 +90,7 @@ object NativeTradingEngine {
                 for (i in 0 until arr.length()) {
                     val b = arr.optJSONObject(i) ?: continue
                     val sym = b.optString("symbol")
-                    if (sym in symbols) bots[sym] = b
+                    if (sym in legacySymbols) bots[sym] = b
                 }
             } catch (_: Exception) { lastError = "Estado guardado dañado; se inicia recuperación" }
         }
@@ -115,7 +116,7 @@ object NativeTradingEngine {
         saveLocked()
     }
     fun enabledSymbols(): List<String> = synchronized(lock) { symbols.filter { bots[it]?.optBoolean("enabled", it != "SUI-USDT") == true } }
-    private fun sharedCapitalLocked(): Double = bots.values.sumOf { it.optDouble("balance", 100.0) }
+    private fun sharedCapitalLocked(): Double = bots["BTC-USDT"]?.optDouble("balance", 100.0) ?: 100.0
     fun setRisk(symbol: String, risk: Double) = synchronized(lock) {
         bots[symbol]?.put("risk", risk.coerceIn(1.0, 100.0)); saveLocked()
     }
@@ -842,32 +843,41 @@ object NativeTradingEngine {
     }
 
     private fun predictedWinProbability(b: JSONObject, features: DoubleArray): Double {
-        val w1 = modelWeights(b, "mlpV2W1", 120, 0.08)
-        val w2 = modelWeights(b, "mlpV2W2", 11, 0.08)
-        return forward(features, w1, w2).second
+        var total = 0.0
+        for (expert in 0 until 10) {
+            val suffix = if (expert == 0) "" else "Expert$expert"
+            val w1 = modelWeights(b, "mlpV2W1$suffix", 120, 0.08)
+            val w2 = modelWeights(b, "mlpV2W2$suffix", 11, 0.08)
+            total += forward(features, w1, w2).second
+        }
+        return (total / 10.0).coerceIn(0.0, 1.0)
     }
 
+    // Ten independently weighted experts train on every shared BTC outcome.
     private fun learn(b: JSONObject, won: Boolean, features: DoubleArray) {
         val y = if (won) 1.0 else 0.0
-        val w1 = modelWeights(b, "mlpV2W1", 120, 0.08)
-        val w2 = modelWeights(b, "mlpV2W2", 11, 0.08)
-        val (hidden, prediction) = forward(features, w1, w2)
-        val lr = 0.003
-        val error = y - prediction
-        val outputDelta = error * prediction * (1.0 - prediction)
-        val oldW2 = w2.copyOf()
-        w2[0] = (w2[0] + lr * error).coerceIn(-2.0, 2.0)
-        for (h in 0 until 10) {
-            val hiddenDelta = outputDelta * oldW2[h + 1] * (1.0 - hidden[h] * hidden[h])
-            w2[h + 1] = (w2[h + 1] + lr * error * hidden[h]).coerceIn(-2.0, 2.0)
-            for (i in features.indices) {
-                val idx = h * features.size + i
-                w1[idx] = (w1[idx] + lr * hiddenDelta * features[i]).coerceIn(-2.0, 2.0)
+        for (expert in 0 until 10) {
+            val suffix = if (expert == 0) "" else "Expert$expert"
+            val w1 = modelWeights(b, "mlpV2W1$suffix", 120, 0.08)
+            val w2 = modelWeights(b, "mlpV2W2$suffix", 11, 0.08)
+            val (hidden, prediction) = forward(features, w1, w2)
+            val lr = 0.003
+            val error = y - prediction
+            val outputDelta = error * prediction * (1.0 - prediction)
+            val oldW2 = w2.copyOf()
+            w2[0] = (w2[0] + lr * error).coerceIn(-2.0, 2.0)
+            for (h in 0 until 10) {
+                val hiddenDelta = outputDelta * oldW2[h + 1] * (1.0 - hidden[h] * hidden[h])
+                w2[h + 1] = (w2[h + 1] + lr * error * hidden[h]).coerceIn(-2.0, 2.0)
+                for (i in features.indices) {
+                    val idx = h * features.size + i
+                    w1[idx] = (w1[idx] + lr * hiddenDelta * features[i]).coerceIn(-2.0, 2.0)
+                }
             }
+            saveWeights(b, "mlpV2W1$suffix", w1)
+            saveWeights(b, "mlpV2W2$suffix", w2)
         }
-        saveWeights(b, "mlpV2W1", w1)
-        saveWeights(b, "mlpV2W2", w2)
-        b.put("learned", b.optInt("learned") + 1).put("modelVersion", 2)
+        b.put("learned", b.optInt("learned") + 1).put("modelVersion", 3).put("ensembleExperts", 10)
     }
 
     private fun fetchLivePrice(symbol: String): Double? {
@@ -939,7 +949,7 @@ object NativeTradingEngine {
         if (!::app.isInitialized) return
         try {
             val savedAt = System.currentTimeMillis()
-            val arr=JSONArray(); symbols.forEach { bots[it]?.let(arr::put) }
+            val arr=JSONArray(); bots.values.forEach { arr.put(it) }
             val totalCapital = bots.values.sumOf { it.optDouble("balance",100.0) + floatingPnl(it) }
             val totalPnl = bots.values.sumOf { it.optDouble("balance",100.0) - it.optDouble("initial",100.0) - it.optDouble("injectedCapital",0.0) + floatingPnl(it) }
             val totalTrades = bots.values.sumOf { it.optInt("trades",0) }
