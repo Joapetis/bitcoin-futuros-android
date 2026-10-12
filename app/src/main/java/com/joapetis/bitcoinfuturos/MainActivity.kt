@@ -28,6 +28,8 @@ class MainActivity : Activity() {
     private lateinit var root:LinearLayout; private lateinit var content:LinearLayout; private lateinit var summary:TextView
     private var detailPrice:TextView? = null; private var liveChart:View? = null
     private var homePnlText:TextView? = null; private var homeCapitalText:TextView? = null; private var homePercentText:TextView? = null
+    private var operationStatusView:TextView? = null; private var operationPositionView:TextView? = null; private var operationExpertsView:TextView? = null
+    private var operationActivityContainer:LinearLayout? = null; private var operationActivitySignature = ""
     private val marketPriceViews = mutableMapOf<String, TextView>()
     private val sparklineViews = mutableListOf<View>()
     private var page="Inicio"; private var selected="BTC-USDT"; private var chartBar="1H"
@@ -60,6 +62,7 @@ class MainActivity : Activity() {
         updateSummary(snapshots)
         if (page=="Inicio") updateHomeTotals(snapshots)
         snapshots.forEach { snap -> marketPriceViews[snap.symbol]?.text=if(snap.price>0)String.format(Locale.US,"%,.4f",snap.price) else "—" }
+        if (page == "Operaciones") updateLiveOperationPanel()
         detailPrice?.let { priceView -> snapshots.firstOrNull{it.symbol==selected}?.let { snap -> priceView.text=if(snap.price>0)String.format(Locale.US,"%,.2f",snap.price) else "Esperando precio…" } }
         sparklineViews.forEach { it.invalidate() }; liveChart?.invalidate()
     }; handler.postDelayed(this,250) } }
@@ -223,10 +226,16 @@ class MainActivity : Activity() {
                 controls(b.symbol,b.risk,b.leverage); actionButton("Volver a mercados"){page="Mercados";render()}
             }
             "Operaciones" -> {
-                panel("Operaciones abiertas","Posiciones abiertas     ·     Historial")
-                val open=bots.filter{it.position!="FLAT"}; cardBlock("Vista general","P/L: "+money(pnl)+"\nBalance: "+money(bots.sumOf{it.equity})+"\nPosiciones abiertas: "+open.size)
-                if(open.isEmpty())content.addView(text("No hay posiciones abiertas ahora mismo.",14f,muted,false))
-                open.forEach{cardBlock(it.symbol.replace("-","/"),it.position+"    "+money(it.pnl)+"\nEntrada: "+(if(it.entry>0)String.format(Locale.US,"%.5f",it.entry)else "—")+"\n"+it.status)}
+                panel("Operación conjunta en vivo", "Bitcoin · diez expertos cooperan para gestionar una sola posición simulada")
+                operationStatusView = text("", 13f, Color.WHITE, true); content.addView(operationStatusView)
+                operationPositionView = text("", 12f, muted, false); content.addView(operationPositionView)
+                panel("Análisis y decisiones de los expertos", "Estructura e impulso en 1m, 5m, 15m, 1H y 4H")
+                operationExpertsView = text("", 11f, muted, false); content.addView(operationExpertsView)
+                panel("Movimientos de la operación conjunta", "Se registra análisis, apertura, filtros, protección dinámica y cierres")
+                operationActivityContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                content.addView(operationActivityContainer)
+                operationActivitySignature = ""
+                updateLiveOperationPanel(forceActivity = true)
             }
             "Historial" -> {
                 panel("Historial detallado","Resultados por bot y cada operación cerrada")
@@ -284,6 +293,50 @@ class MainActivity : Activity() {
                 }
                 cardBlock("Importante","El respaldo se actualiza automáticamente. Antes de desinstalar, confirma que state-v1.json existe en la carpeta elegida. Para actualizar, instala el APK encima sin desinstalar; si Android indica conflicto de firma, el respaldo protege los datos, pero no corrige la firma del APK.")
                 cardBlock("Continuidad","Android puede limitar procesos en segundo plano. Revisa la optimización de batería para mejorar la continuidad.")
+            }
+        }
+    }
+    private fun updateLiveOperationPanel(forceActivity: Boolean = false) {
+        val state = NativeTradingEngine.jointOperationState()
+        val running = state.optBoolean("enabled", true)
+        val side = state.optString("side", "FLAT")
+        val price = state.optDouble("price", 0.0)
+        val entry = state.optDouble("entry", 0.0)
+        val qty = state.optDouble("qty", 0.0)
+        val floating = state.optDouble("floatingPnl", 0.0)
+        val status = if (!running) "PAUSADO · pulsa Reanudar en Inicio" else if (side == "FLAT") "ACTIVO · esperando una señal de la estrategia base v0.5" else "OPERACIÓN ABIERTA · " + side
+        operationStatusView?.text = status + "\\nBTC/USDT · " + (if (price > 0) String.format(Locale.US, "%,.2f USDT", price) else "esperando cotización")
+        operationStatusView?.setTextColor(if (!running) Color.YELLOW else if (side == "FLAT") muted else green)
+        val positionText = if (side == "FLAT") {
+            "Sin posición abierta\\nCapital compartido: " + money(state.optDouble("balance", 100.0)) + "\\n" + state.optString("lastSignal", "Esperando análisis")
+        } else {
+            "Dirección: " + side + " · Cantidad: " + String.format(Locale.US, "%.6f BTC", qty) +
+                "\\nEntrada: " + String.format(Locale.US, "%,.2f", entry) + " · Actual: " + String.format(Locale.US, "%,.2f", price) +
+                "\\nP/L flotante bruto estimado: " + String.format(Locale.US, "%+.2f USDT", floating) +
+                "\\nStop: " + String.format(Locale.US, "%,.2f", state.optDouble("stop", 0.0)) + " · Objetivo: " + String.format(Locale.US, "%,.2f", state.optDouble("target", 0.0)) +
+                "\\nTemporalidad principal: " + state.optString("timeframe", "1H") + " · Protección dinámica: " + if (state.optBoolean("trailingActive", false)) "ACTIVA" else "aún no activa"
+        }
+        operationPositionView?.text = positionText
+        operationExpertsView?.text = "Consenso observado: " + state.optString("expertDirection", "MIXTO") + "\\n" + state.optString("expertConsensusDetail", "Esperando las cinco temporalidades") +
+            "\\n\\nLa señal base v0.5 decide la entrada. Los votos adicionales se registran y aprenden, pero no bloquean una señal base válida."
+        val activity = NativeTradingEngine.jointOperationActivity().take(40)
+        val signature = activity.joinToString("|") { it.optLong("time").toString() + ":" + it.optString("type") + ":" + it.optString("message") }
+        if (forceActivity || signature != operationActivitySignature) {
+            operationActivitySignature = signature
+            operationActivityContainer?.let { parent ->
+                parent.removeAllViews()
+                if (activity.isEmpty()) parent.addView(text("Todavía no hay movimientos registrados. Al llegar los datos públicos de mercado aparecerán aquí las decisiones de los diez expertos.", 12f, muted, false))
+                activity.forEach { event ->
+                    val time = java.text.SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault()).format(java.util.Date(event.optLong("time")))
+                    val type = event.optString("type", "EVENTO")
+                    val color = when(type) { "APERTURA" -> green; "CIERRE", "CIERRE MANUAL" -> if (event.optDouble("pnl", 0.0) >= 0) green else Color.rgb(255,77,90); "PROTECCIÓN" -> blue; "FILTRO" -> Color.YELLOW; else -> Color.WHITE }
+                    val cardView = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), dp(7), dp(10), dp(7)); setBackgroundColor(card) }
+                    cardView.addView(text(type + " · " + time, 12f, color, true))
+                    cardView.addView(text(event.optString("message", ""), 11f, muted, false))
+                    val eventPrice = event.optDouble("price", 0.0)
+                    if (eventPrice > 0) cardView.addView(text("BTC: " + String.format(Locale.US, "%,.2f USDT", eventPrice), 10f, muted, false))
+                    parent.addView(cardView, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, dp(2), 0, dp(2)) })
+                }
             }
         }
     }
