@@ -534,11 +534,13 @@ object NativeTradingEngine {
             val newsLabel = if (news.articles == 0) "RSS pendiente" else "RSS ${if (news.sentiment > 0.15) "positivo" else if (news.sentiment < -0.15) "negativo" else "neutro"} ${news.articles}"
             b.put("newsSentiment", news.sentiment).put("newsUpdatedAt", news.updatedAt)
             // Observation only: RSS context never changes the BTC entry signal.
+            val previousExpertDetail = b.optString("expertConsensusDetail", "")
             b.put("expertDirection", cooperative.direction).put("expertConsensusDetail", cooperative.detail)
+            if (cooperative.detail != previousExpertDetail) recordExpertActivityLocked(b, "VOTOS", cooperative.detail, close)
             val newStatus = "$strategy · estrategia base v0.5: $signal · expertos ${cooperative.direction} · $regime · RSI ${rsi.toInt()} · $newsLabel"
             val oldStatus = b.optString("lastSignal", "")
             b.put("lastSignal", newStatus)
-            if (newStatus != oldStatus) recordExpertActivityLocked(b, "ANÁLISIS", "Base=$signal · consenso=${cooperative.direction} · ${cooperative.detail}", close)
+            if (newStatus != oldStatus) recordExpertActivityLocked(b, "ANÁLISIS", "Base=$signal · consenso=${cooperative.direction} · $regime · RSI ${rsi.toInt()}", close)
             val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
             if (newCandle) b.put("lastCandle", prevCandleTime)
             val adaptiveBar = chooseBotTimeframe(closes, highs, lows, ema9, ema21, ema50, ema200, atr, close)
