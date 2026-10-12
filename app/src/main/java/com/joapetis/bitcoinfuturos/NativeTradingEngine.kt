@@ -150,6 +150,41 @@ object NativeTradingEngine {
     }
     fun candles(symbol: String): List<CandleSnapshot> = synchronized(lock) { candleCache[symbol]?.toList() ?: emptyList() }
 
+    fun jointOperationState(): JSONObject = synchronized(lock) {
+        val b = bots["BTC-USDT"] ?: JSONObject()
+        val price = b.optDouble("price", 0.0)
+        val entry = b.optDouble("entry", 0.0)
+        val qty = b.optDouble("qty", 0.0)
+        val side = b.optString("side", "FLAT")
+        val floating = if (side == "LONG") (price - entry) * qty else if (side == "SHORT") (entry - price) * qty else 0.0
+        JSONObject().put("symbol", "BTC-USDT")
+            .put("enabled", b.optBoolean("enabled", true)).put("side", side)
+            .put("price", price).put("entry", entry).put("qty", qty)
+            .put("stop", b.optDouble("stop", 0.0)).put("target", b.optDouble("target", 0.0))
+            .put("trailingActive", b.optBoolean("trailingActive", false)).put("timeframe", b.optString("botBar", "1H"))
+            .put("balance", b.optDouble("balance", 100.0)).put("floatingPnl", floating)
+            .put("entryPredictedWin", b.optDouble("entryPredictedWin", 0.5))
+            .put("lastSignal", b.optString("lastSignal", "Esperando análisis"))
+            .put("expertDirection", b.optString("expertDirection", "MIXTO"))
+            .put("expertConsensusDetail", b.optString("expertConsensusDetail", "Esperando datos de temporalidades"))
+    }
+
+    fun jointOperationActivity(): List<JSONObject> = synchronized(lock) {
+        val arr = bots["BTC-USDT"]?.optJSONArray("expertActivity") ?: JSONArray()
+        (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let { JSONObject(it.toString()) } }
+            .sortedByDescending { it.optLong("time", 0L) }
+    }
+
+    private fun recordExpertActivityLocked(b: JSONObject, type: String, message: String, price: Double = b.optDouble("price", 0.0), pnl: Double? = null) {
+        val arr = b.optJSONArray("expertActivity") ?: JSONArray()
+        val last = arr.optJSONObject(arr.length() - 1)
+        if (last != null && last.optString("type") == type && last.optString("message") == message) return
+        val event = JSONObject().put("time", System.currentTimeMillis()).put("type", type).put("message", message).put("price", price)
+        if (pnl != null) event.put("pnl", pnl)
+        arr.put(event)
+        while (arr.length() > 300) arr.remove(0)
+        b.put("expertActivity", arr)
+    }
     fun tradeHistory(symbol: String? = null): List<JSONObject> = synchronized(lock) {
         val out = mutableListOf<JSONObject>()
         symbols.filter { symbol == null || it == symbol }.forEach { sym ->
@@ -624,9 +659,7 @@ object NativeTradingEngine {
                 }
             } else if (side == "FLAT" && b.optBoolean("enabled", symbol != "SUI-USDT") && newCandle && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
                 // Parallel positions use a separate share of the common portfolio per enabled bot.
-                val portfolioCapital = sharedCapitalLocked()
-                val activeCount = max(1, bots.values.count { it.optBoolean("enabled", true) })
-                val allocatedCapital = portfolioCapital / activeCount
+                val allocatedCapital = sharedCapitalLocked()
                 val riskCash = allocatedCapital * b.optDouble("risk",5.0)/100.0
                 val stopDistance = max(atr*1.8, close*0.001)
                 val targetDistance = atr*2.7
