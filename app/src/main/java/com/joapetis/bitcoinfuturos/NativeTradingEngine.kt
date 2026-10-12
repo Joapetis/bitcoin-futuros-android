@@ -33,9 +33,9 @@ data class BotSnapshot(
 
 object NativeTradingEngine {
     // Conservative assumptions for a simulated taker order; verify the account's actual fee tier.
-    private const val TAKER_FEE_RATE = 0.0005       // Binance USDⓈ-M Futures standard user VIP 0 taker: 0.05% per side
-    private const val MAKER_FEE_RATE = 0.0002       // Binance USDⓈ-M Futures standard user VIP 0 maker: 0.02% per side
-    private const val SLIPPAGE_RATE = 0.0002        // modelled adverse fill, not a Binance commission
+    private const val TAKER_FEE_RATE = 0.0005       // Simulated taker fee assumption: 0.05% per side
+    private const val MAKER_FEE_RATE = 0.0002       // Reference-only maker fee assumption: 0.02% per side
+    private const val SLIPPAGE_RATE = 0.0002        // Modelled adverse fill, not a commission
     private const val FUNDING_RATE_PER_8H = 0.0001  // assumed 0.01% per 8h; actual funding varies
     private const val MIN_REWARD_TO_COST = 2.0
     private const val MIN_LEARNED_TRADES = 20
@@ -146,8 +146,7 @@ object NativeTradingEngine {
         out.sortedByDescending { it.optLong("time", 0L) }
     }
 
-    // Bybit linear futures is the primary live quote feed; Binance Futures is an independent
-    // secondary reference. OKX REST remains the fallback when both streams are unavailable.
+    // Bybit linear futures is the primary quote feed; OKX REST is the only fallback.
     fun liveQuoteSource(): String = synchronized(lock) {
         val now = System.currentTimeMillis()
         when {
@@ -492,6 +491,32 @@ object NativeTradingEngine {
                 b.put("lastSignal", strategy + " · temporalidad adaptativa " + chosenBar + " → " + adaptiveBar)
             }
             if (side != "FLAT" && entry > 0) {
+                val markNow = b.optDouble("price", close).takeIf { it > 0.0 } ?: close
+                val qtyNow = b.optDouble("qty", 0.0)
+                if (qtyNow > 0.0) {
+                    val oldFavorable = b.optDouble("maxFavorablePrice", entry).takeIf { it > 0.0 } ?: entry
+                    val oldAdverse = b.optDouble("maxAdversePrice", entry).takeIf { it > 0.0 } ?: entry
+                    val favorable = if (side == "LONG") max(oldFavorable, markNow) else min(oldFavorable, markNow)
+                    val adverse = if (side == "LONG") min(oldAdverse, markNow) else max(oldAdverse, markNow)
+                    b.put("maxFavorablePrice", favorable).put("maxAdversePrice", adverse)
+                    val heldHours = max(0L, System.currentTimeMillis() - b.optLong("entryTime", System.currentTimeMillis())) / 3_600_000.0
+                    val estimatedCosts = (entry + markNow) * qtyNow * (TAKER_FEE_RATE + SLIPPAGE_RATE) +
+                        entry * qtyNow * FUNDING_RATE_PER_8H * (heldHours / 8.0)
+                    val unrealizedGross = (if (side == "LONG") markNow - entry else entry - markNow) * qtyNow
+                    if (unrealizedGross > estimatedCosts + atr * qtyNow * 0.35) {
+                        val multiplier = b.optDouble("exitTrailAtr", 1.8).coerceIn(1.5, 2.2)
+                        val distance = max(atr * multiplier, entry * 0.001)
+                        val costPerUnit = estimatedCosts / qtyNow
+                        val costProtectedStop = if (side == "LONG") entry + costPerUnit else entry - costPerUnit
+                        val candidate = if (side == "LONG") max(costProtectedStop, markNow - distance)
+                            else min(costProtectedStop, markNow + distance)
+                        val priorStop = b.optDouble("stop", if (side == "LONG") entry - atr * 1.4 else entry + atr * 1.4)
+                        val tightened = if (side == "LONG") max(priorStop, candidate) else min(priorStop, candidate)
+                        if ((side == "LONG" && tightened > priorStop) || (side == "SHORT" && tightened < priorStop)) {
+                            b.put("stop", tightened).put("trailingActive", true)
+                        }
+                    }
+                }
                 val stop = b.optDouble("stop")
                 val target = b.optDouble("target")
                 val candleHigh = highs.last()
@@ -589,6 +614,8 @@ object NativeTradingEngine {
                     b.put("side",signal).put("entry",executedEntry).put("qty",qty).put("stop",stop).put("target",target)
                         .put("lastEntryCandle",prevCandleTime).put("entryCandle",prevCandleTime)
                         .put("entryTime", System.currentTimeMillis()).put("entryStrategy", strategy)
+                        .put("maxFavorablePrice", executedEntry).put("maxAdversePrice", executedEntry)
+                        .put("trailingActive", false).put("entryAtr", atr)
                         .put("entryPredictedWin", predictedWin).put("entryFeatures", JSONArray().also { arr -> features.forEach { arr.put(it) } })
                 } else {
                     b.put("lastSignal", "$strategy · Entrada filtrada por costes/IA (${(predictedWin*100).toInt()}%)")
