@@ -55,13 +55,9 @@ object NativeTradingEngine {
         .retryOnConnectionFailure(true)
         .build()
     private var bybitSocket: WebSocket? = null
-    private var binanceSocket: WebSocket? = null
     private val bybitQuotes = linkedMapOf<String, Double>()
-    private val binanceQuotes = linkedMapOf<String, Double>()
     private val bybitQuoteAt = linkedMapOf<String, Long>()
-    private val binanceQuoteAt = linkedMapOf<String, Long>()
     private var bybitConnectedAt = 0L
-    private var binanceConnectedAt = 0L
     private var quoteSocketStarted = false
     private lateinit var app: Context
     private var lastError = ""
@@ -155,8 +151,7 @@ object NativeTradingEngine {
     fun liveQuoteSource(): String = synchronized(lock) {
         val now = System.currentTimeMillis()
         when {
-            bybitQuoteAt.values.any { now - it < 15_000L } -> "Bybit Futures · principal"
-            binanceQuoteAt.values.any { now - it < 15_000L } -> "Binance Futures · respaldo"
+            bybitQuoteAt["BTC-USDT"]?.let { now - it < 15_000L } == true -> "Bybit Futures · principal"
             else -> "OKX REST · respaldo"
         }
     }
@@ -198,36 +193,7 @@ object NativeTradingEngine {
                 synchronized(lock) { if (bybitSocket === webSocket) bybitSocket = null }
             }
         })
-        val streams = symbols.joinToString("/") { it.replace("-", "").lowercase(Locale.US) + "@ticker" }
-        val binanceRequest = Request.Builder().url("wss://fstream.binance.com/stream?streams=$streams").build()
-        binanceSocket = quoteClient.newWebSocket(binanceRequest, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) { binanceConnectedAt = System.currentTimeMillis() }
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                try {
-                    val data = JSONObject(text).optJSONObject("data") ?: return
-                    val symbol = data.optString("s").replace("USDT", "-USDT")
-                    val price = data.optString("c").toDoubleOrNull() ?: return
-                    if (symbol in symbols && price > 0.0) synchronized(lock) {
-                        binanceQuotes[symbol] = price
-                        binanceQuoteAt[symbol] = System.currentTimeMillis()
-                        // Binance only takes over if this symbol has no recent Bybit ticks.
-                        if (System.currentTimeMillis() - (bybitQuoteAt[symbol] ?: 0L) > 15_000L) {
-                            bots[symbol]?.put("price", price)?.put("priceSource", "BINANCE")
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                synchronized(lock) { if (binanceSocket === webSocket) binanceSocket = null }
-                quoteClient.dispatcher.executorService.execute {
-                    try { Thread.sleep(4000) } catch (_: InterruptedException) { return@execute }
-                    synchronized(lock) { binanceSocket = null; startBinanceReconnectLocked() }
-                }
-            }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                synchronized(lock) { if (binanceSocket === webSocket) binanceSocket = null }
-            }
-        })
+
     }
 
     private fun startSingleBybitReconnectLocked() {
@@ -255,35 +221,6 @@ object NativeTradingEngine {
                     quoteClient.dispatcher.executorService.execute {
                         try { Thread.sleep(5000) } catch (_: InterruptedException) { return@execute }
                         synchronized(lock) { startSingleBybitReconnectLocked() }
-                    }
-                }
-            })
-    }
-
-    private fun startBinanceReconnectLocked() {
-        if (binanceSocket != null) return
-        val streams = symbols.joinToString("/") { it.replace("-", "").lowercase(Locale.US) + "@ticker" }
-        binanceSocket = quoteClient.newWebSocket(Request.Builder().url("wss://fstream.binance.com/stream?streams=$streams").build(),
-            object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) { binanceConnectedAt = System.currentTimeMillis() }
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    try {
-                        val data = JSONObject(text).optJSONObject("data") ?: return
-                        val symbol = data.optString("s").replace("USDT", "-USDT")
-                        val price = data.optString("c").toDoubleOrNull() ?: return
-                        if (symbol in symbols && price > 0.0) synchronized(lock) {
-                            binanceQuotes[symbol] = price
-                            binanceQuoteAt[symbol] = System.currentTimeMillis()
-                            if (System.currentTimeMillis() - (bybitQuoteAt[symbol] ?: 0L) > 15_000L)
-                                bots[symbol]?.put("price", price)?.put("priceSource", "BINANCE")
-                        }
-                    } catch (_: Exception) {}
-                }
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    synchronized(lock) { if (binanceSocket === webSocket) binanceSocket = null }
-                    quoteClient.dispatcher.executorService.execute {
-                        try { Thread.sleep(5000) } catch (_: InterruptedException) { return@execute }
-                        synchronized(lock) { startBinanceReconnectLocked() }
                     }
                 }
             })
@@ -479,16 +416,11 @@ object NativeTradingEngine {
         // Price updates are independent from strategy candles: a candle request must never freeze the quote.
         val streamPrice = synchronized(lock) {
             val now = System.currentTimeMillis()
-            when {
-                now - (bybitQuoteAt[symbol] ?: 0L) < 15_000L -> bybitQuotes[symbol]
-                now - (binanceQuoteAt[symbol] ?: 0L) < 15_000L -> binanceQuotes[symbol]
-                else -> null
-            }
+            if (now - (bybitQuoteAt[symbol] ?: 0L) < 15_000L) bybitQuotes[symbol] else null
         }
         val streamUnavailable = synchronized(lock) {
             val now = System.currentTimeMillis()
-            now - (bybitQuoteAt[symbol] ?: 0L) >= 15_000L &&
-                now - (binanceQuoteAt[symbol] ?: 0L) >= 15_000L
+            System.currentTimeMillis() - (bybitQuoteAt[symbol] ?: 0L) >= 15_000L
         }
         // Avoid serial REST calls while either public futures stream is healthy.
         val livePrice = streamPrice ?: if (streamUnavailable) fetchLivePrice(symbol) else null
@@ -904,7 +836,7 @@ object NativeTradingEngine {
     }
 
     private fun fetchCandles(symbol: String, bar: String = "1H"): List<JSONArray>? {
-        // Bybit first (primary live source), Binance Futures second, OKX as final fallback.
+        // Bybit first; OKX REST is the only fallback.
         val interval = when (bar) { "1m" -> "1"; "5m" -> "5"; "15m" -> "15"; "1H" -> "60"; "4H" -> "240"; "1D" -> "D"; else -> "60" }
         try {
             val url = URL("https://api.bybit.com/v5/market/kline?category=linear&symbol=" + symbol.replace("-", "") + "&interval=" + interval + "&limit=220")
@@ -914,12 +846,6 @@ object NativeTradingEngine {
                 val arr = root.optJSONObject("result")?.optJSONArray("list")
                 if (root.optInt("retCode", -1) == 0 && arr != null && arr.length() > 0) return (0 until arr.length()).mapNotNull { arr.optJSONArray(it) }.reversed()
             } finally { conn.disconnect() }
-        } catch (_: Exception) {}
-        try {
-            val binanceInterval = when (bar) { "1H" -> "1h"; "4H" -> "4h"; "1D" -> "1d"; else -> bar }
-            val url = URL("https://fapi.binance.com/fapi/v1/klines?symbol=" + symbol.replace("-", "") + "&interval=" + binanceInterval + "&limit=220")
-            val conn = (url.openConnection() as HttpURLConnection).apply { connectTimeout=2500; readTimeout=2500; requestMethod="GET" }
-            try { val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() }); if (arr.length() > 0) return (0 until arr.length()).mapNotNull { arr.optJSONArray(it) } } finally { conn.disconnect() }
         } catch (_: Exception) {}
         try {
             val url = URL("https://www.okx.com/api/v5/market/candles?instId=$symbol&bar=$bar&limit=220")
