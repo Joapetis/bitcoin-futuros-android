@@ -191,6 +191,19 @@ class MainActivity : Activity() {
             }
             "Ajustes" -> {
                 panel("Ajustes","Configuración de la aplicación")
+                cardBlock("Cartera compartida e interés compuesto",
+                    "Los bots comparten el capital total y solo se permite una posición abierta a la vez. Cada resultado neto modifica el capital disponible para la siguiente operación. Riesgo configurado al 100% del capital compartido: puede perderse toda la cartera. Las comisiones se estiman como taker Binance VIP 0 (0,05% por lado), más deslizamiento y financiación estimados.")
+                panel("Bots activos","Activa solo los bots que quieras permitir operar. SUI se inicia desactivado por sus pérdidas observadas.")
+                symbols.forEach { sym ->
+                    val cb=CheckBox(this).apply {
+                        text=sym.replace("-","/") + if(sym=="AVAX-USDT") " · estrategia conservada" else ""
+                        setTextColor(Color.WHITE)
+                        buttonTintList=android.content.res.ColorStateList.valueOf(blue)
+                        isChecked=NativeTradingEngine.isBotEnabled(sym)
+                        setOnCheckedChangeListener { _, checked -> NativeTradingEngine.setBotEnabled(sym,checked) }
+                    }
+                    content.addView(cb)
+                }
                 cardBlock("Simulación en segundo plano","Mantiene activos los bots mediante el servicio Android")
                 content.addView(text("Bot a configurar",13f,Color.WHITE,true))
                 val spinner=Spinner(this); spinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,symbols); spinner.setSelection(symbols.indexOf(selected).coerceAtLeast(0))
