@@ -277,11 +277,13 @@ class MainActivity : Activity() {
             }
             "Ajustes" -> {
                 panel("Ajustes","Configuración de la aplicación")
-                cardBlock("Cartera compartida e interés compuesto",
-                    "Los bots comparten el capital total y solo se permite una posición abierta a la vez. Cada resultado neto modifica el capital disponible para la siguiente operación. Riesgo configurado al 100% del capital compartido: puede perderse toda la cartera. Las comisiones se estiman como taker Binance VIP 0 (0,05% por lado), más deslizamiento y financiación estimados.")
-                panel("Bots activos","Activa solo los bots que quieras permitir operar. SUI se inicia desactivado por sus pérdidas observadas.")
-                cardBlock("Mercado activo", "BTC/USDT · diez expertos cooperativos · una única posición compartida")
-                cardBlock("Simulación en segundo plano","Mantiene activos los bots mediante el servicio Android")
+                cardBlock("Capital compartido y gestión de riesgo",
+                    "Los diez expertos comparten el capital de BTC/USDT y gestionan una sola posición simulada. El resultado neto de cada operación modifica el saldo disponible. El riesgo por operación se configura abajo; cualquier simulación puede perder capital.")
+                panel("Mercado activo","Solo Bitcoin · BTC/USDT")
+                cardBlock("Motor cooperativo","Los expertos se reparten 1m, 5m, 15m, 1H y 4H, comparten una operación y aprenden de su resultado.")
+                val btcSettings = bots.firstOrNull { it.symbol == "BTC-USDT" } ?: bots.first()
+                controls("BTC-USDT", btcSettings.risk, btcSettings.leverage)
+                cardBlock("Simulación en segundo plano","Mantiene activa la simulación mediante el servicio Android")
                 cardBlock("Supuestos de costes de futuros simulados","Supuesto de simulación: comisión taker 0,05% por lado, maker 0,02% por lado como referencia, deslizamiento 0,02% por lado y financiación estimada 0,01% cada 8 h. Las tasas reales dependen del mercado y pueden variar.")
                 cardBlock("IA neuronal local adaptativa","Red neuronal multicapa 12-10-1: tendencia, momentum en tres ventanas, volatilidad ATR, volumen relativo, RSI, alineación EMA, eficiencia direccional, cuerpo de vela y tendencia larga. Se ejecuta en el móvil y conserva sus pesos por bot. Modelo experimental; no garantiza rentabilidad.")
                 cardBlock("General","Modo oscuro · Español\nDatos públicos de mercado · Sin claves privadas\nSolo simulación: no se envían órdenes reales. La viabilidad debe comprobarse con backtesting temporal y paper trading.")
