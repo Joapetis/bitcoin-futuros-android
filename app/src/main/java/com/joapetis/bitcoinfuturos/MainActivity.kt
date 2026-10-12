@@ -189,7 +189,7 @@ class MainActivity : Activity() {
                 selected = "BTC-USDT"
                 chart()
                 NativeTradingEngine.requestChartCandles("BTC-USDT", chartBar) { handler.post { liveChart?.invalidate() } }
-                cardBlock("Motor cooperativo de 10 expertos", "Una sola operación compartida sobre BTC. Los expertos aportan aprendizaje a un modelo común; ninguna operación se abre por separado por experto.")
+                cardBlock("Motor cooperativo de 10 expertos", "Dos agentes analizan cada temporalidad: 1m, 5m, 15m, 1H y 4H. Se exige consenso mínimo de 6/10 votos y coincidencia con la estrategia base antes de entrar. Todos aprenden del mismo resultado y comparten una única posición BTC; no abren operaciones separadas.")
                 cardBlock("Estado", if (NativeTradingEngine.isRunning()) "Operaciones activas" else "Operaciones pausadas · pulsa Reanudar en Inicio")
             }
             "Detalle" -> {
