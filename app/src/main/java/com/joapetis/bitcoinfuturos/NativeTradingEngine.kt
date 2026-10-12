@@ -311,6 +311,21 @@ object NativeTradingEngine {
         val c = candleCache[symbol] ?: return@synchronized 0.0
         if (c.size < 25 || c[c.size-25].close == 0.0) 0.0 else (c.last().close / c[c.size-25].close - 1.0) * 100.0
     }
+    fun estimateNetIfClosedNow(): Double = synchronized(lock) {
+        val now = System.currentTimeMillis()
+        symbols.sumOf { symbol ->
+            val b = bots[symbol] ?: return@sumOf 0.0
+            val side = b.optString("side", "FLAT")
+            val entry = b.optDouble("entry", 0.0); val mark = b.optDouble("price", 0.0); val qty = b.optDouble("qty", 0.0)
+            if (side == "FLAT" || entry <= 0.0 || mark <= 0.0 || qty <= 0.0) return@sumOf 0.0
+            val exit = mark * (if (side == "LONG") 1.0 - SLIPPAGE_RATE else 1.0 + SLIPPAGE_RATE)
+            val gross = (if (side == "LONG") exit - entry else entry - exit) * qty
+            val fees = (entry * qty + exit * qty) * TAKER_FEE_RATE
+            val heldMs = max(0L, now - b.optLong("entryTime", now))
+            val funding = entry * qty * FUNDING_RATE_PER_8H * (heldMs / 28_800_000.0)
+            gross - fees - funding
+        }
+    }
     fun stopAllAndCloseNow(): Double = synchronized(lock) {
         val now = System.currentTimeMillis()
         var totalNet = 0.0
