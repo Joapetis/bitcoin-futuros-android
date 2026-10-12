@@ -108,6 +108,7 @@ object NativeTradingEngine {
         saveLocked()
         initialized = true
         startQuoteStreamsLocked()
+        NewsIntelligence.init(app)
     }
 
     fun isBotEnabled(symbol: String): Boolean = synchronized(lock) { bots[symbol]?.optBoolean("enabled", symbol != "SUI-USDT") ?: false }
@@ -466,6 +467,7 @@ object NativeTradingEngine {
 
     fun tickAll() {
         if (!initialized) return
+        NewsIntelligence.pollIfDue()
         symbols.forEach { symbol ->
             try { processSymbol(symbol) }
             catch (e: Exception) { synchronized(lock) { lastError = "$symbol: ${e.message ?: "sin conexión"}".take(120) } }
@@ -545,7 +547,11 @@ object NativeTradingEngine {
             val strategy = strategyName(symbol)
             val signal = strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200, rsi, atr, regime, returns)
             b.put("strategy", strategy)
-            b.put("lastSignal", "$strategy · $regime · RSI ${rsi.toInt()} · Señal $signal")
+            val news = NewsIntelligence.summary()
+            val newsLabel = if (news.articles == 0) "RSS pendiente" else "RSS ${if (news.sentiment > 0.15) "positivo" else if (news.sentiment < -0.15) "negativo" else "neutro"} ${news.articles}"
+            b.put("newsSentiment", news.sentiment).put("newsUpdatedAt", news.updatedAt)
+            // Observation only: RSS context never changes the BTC entry signal.
+            b.put("lastSignal", "$strategy · $regime · RSI ${rsi.toInt()} · Señal $signal · $newsLabel")
             val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
             if (newCandle) b.put("lastCandle", prevCandleTime)
             val adaptiveBar = chooseBotTimeframe(closes, highs, lows, ema9, ema21, ema50, ema200, atr, close)
