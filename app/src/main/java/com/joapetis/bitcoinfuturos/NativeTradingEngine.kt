@@ -116,7 +116,6 @@ object NativeTradingEngine {
     }
     fun enabledSymbols(): List<String> = synchronized(lock) { symbols.filter { bots[it]?.optBoolean("enabled", it != "SUI-USDT") == true } }
     private fun sharedCapitalLocked(): Double = bots.values.sumOf { it.optDouble("balance", 100.0) }
-    private fun hasOpenPositionLocked(): Boolean = bots.values.any { it.optString("side", "FLAT") != "FLAT" }
     fun setRisk(symbol: String, risk: Double) = synchronized(lock) {
         bots[symbol]?.put("risk", risk.coerceIn(1.0, 100.0)); saveLocked()
     }
@@ -311,6 +310,35 @@ object NativeTradingEngine {
     fun marketChange24h(symbol: String): Double = synchronized(lock) {
         val c = candleCache[symbol] ?: return@synchronized 0.0
         if (c.size < 25 || c[c.size-25].close == 0.0) 0.0 else (c.last().close / c[c.size-25].close - 1.0) * 100.0
+    }
+    fun stopAllAndCloseNow(): Double = synchronized(lock) {
+        val now = System.currentTimeMillis()
+        var totalNet = 0.0
+        symbols.forEach { symbol ->
+            val b = bots[symbol] ?: return@forEach
+            b.put("enabled", false)
+            val side = b.optString("side", "FLAT")
+            val entry = b.optDouble("entry", 0.0)
+            val mark = b.optDouble("price", 0.0)
+            val qty = b.optDouble("qty", 0.0)
+            if (side == "FLAT" || entry <= 0.0 || mark <= 0.0 || qty <= 0.0) return@forEach
+            val exit = mark * (if (side == "LONG") 1.0 - SLIPPAGE_RATE else 1.0 + SLIPPAGE_RATE)
+            val gross = (if (side == "LONG") exit - entry else entry - exit) * qty
+            val fees = (entry * qty + exit * qty) * TAKER_FEE_RATE
+            val heldMs = max(0L, now - b.optLong("entryTime", now))
+            val funding = entry * qty * FUNDING_RATE_PER_8H * (heldMs / 28_800_000.0)
+            val net = gross - fees - funding
+            val before = b.optDouble("balance", 100.0)
+            val after = max(0.0, before + net)
+            b.put("balance", after)
+            val history = b.optJSONArray("history") ?: JSONArray()
+            history.put(JSONObject().put("type","TRADE").put("time",now).put("entryTime",b.optLong("entryTime",now)).put("side",side).put("entry",entry).put("exit",exit).put("qty",qty).put("gross",gross).put("fees",fees).put("funding",funding).put("pnl",net).put("balanceBefore",before).put("balanceAfter",after).put("reason","Parada de emergencia").put("strategy",b.optString("entryStrategy","")).put("timeframe",b.optString("botBar","5m")).put("durationMs",heldMs))
+            b.put("history",history).put("side","FLAT").put("entry",0.0).put("qty",0.0).put("stop",0.0).put("target",0.0).put("entryFeatures",JSONArray()).put("trades",b.optInt("trades",0)+1)
+            if (net > 0) b.put("wins",b.optInt("wins",0)+1) else b.put("losses",b.optInt("losses",0)+1)
+            totalNet += net
+        }
+        saveLocked()
+        totalNet
     }
     fun totalPnl() = snapshots().sumOf { it.pnl }
     fun lastError(): String = synchronized(lock) { lastError }
@@ -539,11 +567,11 @@ object NativeTradingEngine {
                     }
                 }
             } else if (side == "FLAT" && b.optBoolean("enabled", symbol != "SUI-USDT") && newCandle && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
-                // Portfolio mode: all bots share equity; only one position may be open at a time.
-                // Profits/losses are booked into the trading bot's ledger and therefore compound across the shared pool.
-                if (hasOpenPositionLocked()) return
+                // Parallel positions use a separate share of the common portfolio per enabled bot.
                 val portfolioCapital = sharedCapitalLocked()
-                val riskCash = portfolioCapital * b.optDouble("risk",100.0)/100.0
+                val activeCount = max(1, bots.values.count { it.optBoolean("enabled", true) })
+                val allocatedCapital = portfolioCapital / activeCount
+                val riskCash = allocatedCapital * b.optDouble("risk",100.0)/100.0
                 val stopDistance = max(atr*1.4, close*0.0008)
                 val targetDistance = atr*2.4
                 val estimatedRoundTripCostRate = 2.0 * (TAKER_FEE_RATE + SLIPPAGE_RATE) + FUNDING_RATE_PER_8H
@@ -554,7 +582,7 @@ object NativeTradingEngine {
                 // Once enough closes exist, the on-device online learner can veto weak setups.
                 val costsCovered = expectedMoveRate >= estimatedRoundTripCostRate * MIN_REWARD_TO_COST
                 val learnerAllows = sampleCount < MIN_LEARNED_TRADES || predictedWin >= MIN_PREDICTED_WIN
-                val maxNotional = portfolioCapital * b.optInt("leverage",100)
+                val maxNotional = allocatedCapital * b.optInt("leverage",100)
                 val qty = min(riskCash / stopDistance, maxNotional / close)
                 if (costsCovered && learnerAllows && qty > 0 && qty.isFinite()) {
                     val executedEntry = close * (if (signal == "LONG") 1.0 + SLIPPAGE_RATE else 1.0 - SLIPPAGE_RATE)
