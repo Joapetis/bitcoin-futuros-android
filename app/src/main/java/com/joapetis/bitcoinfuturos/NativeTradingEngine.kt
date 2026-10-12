@@ -377,6 +377,12 @@ object NativeTradingEngine {
         } catch (e: Exception) { "No se pudo acceder a la carpeta: " + (e.message ?: "permiso denegado") }
     }
     fun backupFolderLabel(): String = if (backupTreeUri == null) "No seleccionada · se solicitará acceso" else "Configurada · respaldo automático"
+    fun shouldRequestBackupFolder(): Boolean = synchronized(lock) {
+        backupTreeUri == null && !app.getSharedPreferences("backup_settings", Context.MODE_PRIVATE).getBoolean("prompted", false)
+    }
+    fun markBackupPrompted() {
+        app.getSharedPreferences("backup_settings", Context.MODE_PRIVATE).edit().putBoolean("prompted", true).apply()
+    }
 
     private fun archiveCurrentExternalBackupLocked() {
         val tree = backupTreeUri ?: return
