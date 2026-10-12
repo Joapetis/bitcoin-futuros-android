@@ -156,16 +156,19 @@ object NewsIntelligence {
 
     private fun parseDate(raw: String): Long {
         if (raw.isBlank()) return 0L
+        try { return java.time.ZonedDateTime.parse(raw, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() } catch (_: Exception) {}
         try { return java.time.ZonedDateTime.parse(raw).toInstant().toEpochMilli() } catch (_: Exception) {}
         try { return java.time.Instant.parse(raw).toEpochMilli() } catch (_: Exception) {}
         return 0L
     }
 
-    private fun loadItems(): JSONArray = try {
-        val ctx = context ?: return JSONArray()
-        val f = File(ctx.filesDir, "CryptoFutures/news-v1.json")
-        if (!f.exists()) JSONArray() else JSONObject(f.readText()).optJSONArray("items") ?: JSONArray()
-    } catch (_: Exception) { JSONArray() }
+    private fun loadItems(): JSONArray {
+        return try {
+            val ctx = context ?: return JSONArray()
+            val f = File(ctx.filesDir, "CryptoFutures/news-v1.json")
+            if (!f.exists()) JSONArray() else JSONObject(f.readText()).optJSONArray("items") ?: JSONArray()
+        } catch (_: Exception) { JSONArray() }
+    }
 
     private fun load() {
         val arr = loadItems()
