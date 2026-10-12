@@ -30,6 +30,7 @@ class MainActivity : Activity() {
     private var homePnlText:TextView? = null; private var homeCapitalText:TextView? = null; private var homePercentText:TextView? = null
     private var operationStatusView:TextView? = null; private var operationPositionView:TextView? = null; private var operationExpertsView:TextView? = null
     private var operationActivityContainer:LinearLayout? = null; private var operationActivitySignature = ""
+    private var lastOperationRefreshAt = 0L
     private val marketPriceViews = mutableMapOf<String, TextView>()
     private val sparklineViews = mutableListOf<View>()
     private var page="Inicio"; private var selected="BTC-USDT"; private var chartBar="1H"
@@ -62,7 +63,8 @@ class MainActivity : Activity() {
         updateSummary(snapshots)
         if (page=="Inicio") updateHomeTotals(snapshots)
         snapshots.forEach { snap -> marketPriceViews[snap.symbol]?.text=if(snap.price>0)String.format(Locale.US,"%,.4f",snap.price) else "—" }
-        if (page == "Operaciones") updateLiveOperationPanel()
+        val operationNow = System.currentTimeMillis()
+        if (page == "Operaciones" && operationNow - lastOperationRefreshAt >= 1000L) { lastOperationRefreshAt = operationNow; updateLiveOperationPanel() }
         detailPrice?.let { priceView -> snapshots.firstOrNull{it.symbol==selected}?.let { snap -> priceView.text=if(snap.price>0)String.format(Locale.US,"%,.2f",snap.price) else "Esperando precio…" } }
         sparklineViews.forEach { it.invalidate() }; liveChart?.invalidate()
     }; handler.postDelayed(this,250) } }
