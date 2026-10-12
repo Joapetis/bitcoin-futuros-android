@@ -24,6 +24,8 @@ import kotlin.math.sqrt
 
 data class CandleSnapshot(val time: Long, val open: Double, val high: Double, val low: Double, val close: Double, val volume: Double)
 
+private data class CooperativeDecision(val direction: String, val detail: String, val expertFeatures: List<DoubleArray>)
+
 data class BotSnapshot(
     val symbol: String, val balance: Double, val price: Double, val pnl: Double,
     val position: String, val entry: Double, val trades: Int, val wins: Int,
@@ -96,7 +98,7 @@ object NativeTradingEngine {
                 .put("symbol", sym).put("balance", 100.0).put("initial", 100.0)
                 .put("price", 0.0).put("entry", 0.0).put("qty", 0.0).put("side", "FLAT")
                 .put("stop", 0.0).put("target", 0.0).put("trades", 0).put("wins", 0)
-                .put("losses", 0).put("learned", 0).put("risk", 100.0).put("leverage", 100).put("enabled", sym != "SUI-USDT")
+                .put("losses", 0).put("learned", 0).put("risk", 5.0).put("leverage", 100).put("enabled", sym != "SUI-USDT")
                 .put("injectedCapital", 0.0).put("recharges", 0).put("learningSamples", JSONArray()).put("lastBatchTrained", 0)
                 .put("lastCandle", 0L).put("botBar", "1H").put("nnBias", 0.0).put("nnTrend", 0.0).put("nnMomentum", 0.0)
                 .put("lastSignal", "Analizando mercado").put("history", JSONArray())
@@ -489,15 +491,15 @@ object NativeTradingEngine {
                 ((ema50 - ema200) / close * 100.0).coerceIn(-3.0, 3.0))
             val strategy = strategyName(symbol)
             val baseSignal = strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200, rsi, atr, regime, returns)
-            // The legacy strategy remains intact; the cooperative layer only accepts its signal
-            // when the 10 timeframe agents independently reach the same direction.
-            val signal = if (baseSignal != "FLAT" && cooperative.first == baseSignal) baseSignal else "FLAT"
+            // Keep the v0.5 signal and entry cadence intact: ensemble disagreement is never an entry veto.
+            val signal = baseSignal
             b.put("strategy", strategy)
             val news = NewsIntelligence.summary()
             val newsLabel = if (news.articles == 0) "RSS pendiente" else "RSS ${if (news.sentiment > 0.15) "positivo" else if (news.sentiment < -0.15) "negativo" else "neutro"} ${news.articles}"
             b.put("newsSentiment", news.sentiment).put("newsUpdatedAt", news.updatedAt)
             // Observation only: RSS context never changes the BTC entry signal.
-            b.put("lastSignal", "$strategy · consenso 10 expertos ${cooperative.second} · $regime · RSI ${rsi.toInt()} · Señal $signal · $newsLabel")
+            b.put("expertDirection", cooperative.direction).put("expertConsensusDetail", cooperative.detail)
+            b.put("lastSignal", "$strategy · estrategia base v0.5: $signal · expertos ${cooperative.direction} · $regime · RSI ${rsi.toInt()} · $newsLabel")
             val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
             if (newCandle) b.put("lastCandle", prevCandleTime)
             val adaptiveBar = chooseBotTimeframe(closes, highs, lows, ema9, ema21, ema50, ema200, atr, close)
@@ -625,9 +627,9 @@ object NativeTradingEngine {
                 val portfolioCapital = sharedCapitalLocked()
                 val activeCount = max(1, bots.values.count { it.optBoolean("enabled", true) })
                 val allocatedCapital = portfolioCapital / activeCount
-                val riskCash = allocatedCapital * b.optDouble("risk",100.0)/100.0
-                val stopDistance = max(atr*1.4, close*0.0008)
-                val targetDistance = atr*2.4
+                val riskCash = allocatedCapital * b.optDouble("risk",5.0)/100.0
+                val stopDistance = max(atr*1.8, close*0.001)
+                val targetDistance = atr*2.7
                 val estimatedRoundTripCostRate = 2.0 * (TAKER_FEE_RATE + SLIPPAGE_RATE) + FUNDING_RATE_PER_8H
                 val expectedMoveRate = targetDistance / close
                 val predictedWin = predictedWinProbability(b, features)
@@ -661,41 +663,82 @@ object NativeTradingEngine {
      * A direction is accepted only when at least 6/10 votes agree and it matches the
      * unchanged legacy strategy's signal on the bot's active timeframe.
      */
-    private fun cooperativeDecision(symbol: String, primaryBar: String, primaryCandles: List<JSONArray>): Pair<String, String> {
+    /**
+     * Ten distinct cooperative roles: structure and momentum on five BTC timeframes.
+     * The base v0.5 signal controls entries; experts provide collaboration, telemetry and learning.
+     */
+    private fun cooperativeDecision(symbol: String, primaryBar: String, primaryCandles: List<JSONArray>): CooperativeDecision {
         val bars = listOf("1m", "5m", "15m", "1H", "4H")
         val futures = bars.associateWith { bar ->
-            if (bar == primaryBar) null
-            else ensembleExecutor.submit<List<JSONArray>?> { fetchCandles(symbol, bar) }
+            if (bar == primaryBar) null else ensembleExecutor.submit<List<JSONArray>?> { fetchCandles(symbol, bar) }
         }
-        val votes = mutableListOf<String>()
+        val signals = mutableListOf<String>()
+        val details = mutableListOf<String>()
+        val featureSets = mutableListOf<DoubleArray>()
+        var loadedLongs = 0
+        var loadedShorts = 0
         for (bar in bars) {
             val candles = if (bar == primaryBar) primaryCandles else try {
                 futures[bar]?.get(3200, java.util.concurrent.TimeUnit.MILLISECONDS)
             } catch (_: Exception) { null }
-            val decision = if (candles != null && candles.size >= 60) {
-                val closes = candles.map { it.optDouble(4) }
-                val highs = candles.map { it.optDouble(2) }
-                val lows = candles.map { it.optDouble(3) }
-                val close = closes.lastOrNull() ?: 0.0
-                if (close <= 0.0) "FLAT" else {
-                    val ema9 = ema(closes, 9); val ema21 = ema(closes, 21)
-                    val ema50 = ema(closes, 50); val ema200 = ema(closes, min(200, closes.size))
-                    val rsiValue = rsi(closes, 14)
-                    val atrValue = atr(highs, lows, closes, 14)
-                    val regimeValue = if (abs(ema50 - ema200) / close > 0.004) "TENDENCIA" else "RANGO"
-                    strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200,
-                        rsiValue, atrValue, regimeValue, returnOver(closes, 12))
-                }
-            } else "FLAT"
-            // Two agents are assigned to each timeframe; both receive the same timeframe evidence,
-            // but their neural weights remain independent and are trained on the shared outcome.
-            votes.add(decision)
-            votes.add(decision)
+            if (candles == null || candles.size < 60) {
+                signals.add("FLAT"); signals.add("FLAT")
+                details.add("$bar: sin datos")
+                featureSets.add(DoubleArray(12)); featureSets.add(DoubleArray(12))
+                continue
+            }
+            val closes = candles.map { it.optDouble(4) }
+            val highs = candles.map { it.optDouble(2) }
+            val lows = candles.map { it.optDouble(3) }
+            val close = closes.lastOrNull() ?: 0.0
+            if (close <= 0.0) {
+                signals.add("FLAT"); signals.add("FLAT")
+                details.add("$bar: precio inválido")
+                featureSets.add(DoubleArray(12)); featureSets.add(DoubleArray(12))
+                continue
+            }
+            val ema9 = ema(closes, 9); val ema21 = ema(closes, 21)
+            val ema50 = ema(closes, 50); val ema200 = ema(closes, min(200, closes.size))
+            val rsiValue = rsi(closes, 14)
+            val atrValue = atr(highs, lows, closes, 14)
+            val returns3 = returnOver(closes, 3)
+            val returns12 = returnOver(closes, 12)
+            val returns48 = returnOver(closes, 48)
+            val regimeValue = if (abs(ema50 - ema200) / close > 0.004) "TENDENCIA" else "RANGO"
+            val structure = strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200,
+                rsiValue, atrValue, regimeValue, returns12)
+            val momentum = when {
+                ema9 > ema21 && ema21 > ema50 && returns3 > 0.0005 && returns12 > 0.001 && rsiValue in 50.0..80.0 -> "LONG"
+                ema9 < ema21 && ema21 < ema50 && returns3 < -0.0005 && returns12 < -0.001 && rsiValue in 20.0..50.0 -> "SHORT"
+                else -> "FLAT"
+            }
+            val volumes = candles.map { it.optDouble(5) }
+            val volNow = volumes.lastOrNull() ?: 0.0
+            val volAvg = volumes.takeLast(21).dropLast(1).average().takeIf { it > 0.0 } ?: volNow
+            val volumeRatio = if (volAvg > 0.0) volNow / volAvg else 1.0
+            val alignment = ((if (ema9 > ema21) 1.0 else -1.0) +
+                (if (ema21 > ema50) 1.0 else -1.0) +
+                (if (ema50 > ema200) 1.0 else -1.0)) / 3.0
+            val lastRange = max(1e-12, highs.last() - lows.last())
+            val body = ((closes.last() - candles.last().optDouble(1)) / lastRange).coerceIn(-1.0, 1.0)
+            val features = modelFeatures(((ema9 - ema21) / close * 100.0).coerceIn(-3.0, 3.0),
+                returns3 * 100.0, returns12 * 100.0, returns48 * 100.0,
+                atrValue / close, volumeRatio, ((rsiValue - 50.0) / 50.0).coerceIn(-1.0, 1.0),
+                alignment, directionalEfficiency(closes, 12), body,
+                ((ema50 - ema200) / close * 100.0).coerceIn(-3.0, 3.0))
+            signals.add(structure); signals.add(momentum)
+            featureSets.add(features); featureSets.add(features.copyOf())
+            if (structure == "LONG") loadedLongs++ else if (structure == "SHORT") loadedShorts++
+            if (momentum == "LONG") loadedLongs++ else if (momentum == "SHORT") loadedShorts++
+            details.add("$bar: estructura=$structure · impulso=$momentum")
         }
-        val longs = votes.count { it == "LONG" }
-        val shorts = votes.count { it == "SHORT" }
-        val chosen = when { longs >= 6 && longs > shorts -> "LONG"; shorts >= 6 && shorts > longs -> "SHORT"; else -> "FLAT" }
-        return chosen to "1m:${votes[0]}/${votes[1]} 5m:${votes[2]}/${votes[3]} 15m:${votes[4]}/${votes[5]} 1H:${votes[6]}/${votes[7]} 4H:${votes[8]}/${votes[9]} · L$longs/S$shorts"
+        val chosen = when {
+            loadedLongs >= 6 && loadedLongs > loadedShorts -> "LONG"
+            loadedShorts >= 6 && loadedShorts > loadedLongs -> "SHORT"
+            else -> "MIXTO"
+        }
+        return CooperativeDecision(chosen, details.joinToString(" | ") + " | votos LONG=$loadedLongs SHORT=$loadedShorts",
+            featureSets.take(10).map { if (it.size == 12) it else DoubleArray(12) })
     }
 
     private fun chooseBotTimeframe(
