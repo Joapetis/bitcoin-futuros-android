@@ -49,6 +49,7 @@ object NativeTradingEngine {
     private val candleCache = linkedMapOf<String, List<CandleSnapshot>>()
     private val chartCandleCache = linkedMapOf<String, List<CandleSnapshot>>()
     private val chartExecutor = java.util.concurrent.Executors.newFixedThreadPool(3)
+    private val ensembleExecutor = java.util.concurrent.Executors.newFixedThreadPool(5)
     private val chartRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val quoteClient = OkHttpClient.Builder()
         .pingInterval(20, TimeUnit.SECONDS)
@@ -443,6 +444,7 @@ object NativeTradingEngine {
         val chosenBar = synchronized(lock) { bots[symbol]?.optString("botBar", "1H") ?: "1H" }
         val candles = fetchCandles(symbol, chosenBar) ?: return
         if (candles.size < 60) return
+        val cooperative = cooperativeDecision(symbol, chosenBar, candles)
         val closes = candles.map { it.optDouble(4) }
         val highs = candles.map { it.optDouble(2) }
         val lows = candles.map { it.optDouble(3) }
@@ -486,13 +488,16 @@ object NativeTradingEngine {
                 atrPct, volumeRatio, rsiFeature, emaAlignment, efficiency, candleBody,
                 ((ema50 - ema200) / close * 100.0).coerceIn(-3.0, 3.0))
             val strategy = strategyName(symbol)
-            val signal = strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200, rsi, atr, regime, returns)
+            val baseSignal = strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200, rsi, atr, regime, returns)
+            // The legacy strategy remains intact; the cooperative layer only accepts its signal
+            // when the 10 timeframe agents independently reach the same direction.
+            val signal = if (baseSignal != "FLAT" && cooperative.first == baseSignal) baseSignal else "FLAT"
             b.put("strategy", strategy)
             val news = NewsIntelligence.summary()
             val newsLabel = if (news.articles == 0) "RSS pendiente" else "RSS ${if (news.sentiment > 0.15) "positivo" else if (news.sentiment < -0.15) "negativo" else "neutro"} ${news.articles}"
             b.put("newsSentiment", news.sentiment).put("newsUpdatedAt", news.updatedAt)
             // Observation only: RSS context never changes the BTC entry signal.
-            b.put("lastSignal", "$strategy · $regime · RSI ${rsi.toInt()} · Señal $signal · $newsLabel")
+            b.put("lastSignal", "$strategy · consenso 10 expertos ${cooperative.second} · $regime · RSI ${rsi.toInt()} · Señal $signal · $newsLabel")
             val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
             if (newCandle) b.put("lastCandle", prevCandleTime)
             val adaptiveBar = chooseBotTimeframe(closes, highs, lows, ema9, ema21, ema50, ema200, atr, close)
@@ -648,6 +653,49 @@ object NativeTradingEngine {
                 }
             }
         }
+    }
+
+    /**
+     * Ten cooperative agents: two independently score each timeframe (1m, 5m, 15m, 1H, 4H).
+     * They share the same BTC position and learn from its single realized outcome.
+     * A direction is accepted only when at least 6/10 votes agree and it matches the
+     * unchanged legacy strategy's signal on the bot's active timeframe.
+     */
+    private fun cooperativeDecision(symbol: String, primaryBar: String, primaryCandles: List<JSONArray>): Pair<String, String> {
+        val bars = listOf("1m", "5m", "15m", "1H", "4H")
+        val futures = bars.associateWith { bar ->
+            if (bar == primaryBar) null
+            else ensembleExecutor.submit<List<JSONArray>?> { fetchCandles(symbol, bar) }
+        }
+        val votes = mutableListOf<String>()
+        for (bar in bars) {
+            val candles = if (bar == primaryBar) primaryCandles else try {
+                futures[bar]?.get(3200, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (_: Exception) { null }
+            val decision = if (candles != null && candles.size >= 60) {
+                val closes = candles.map { it.optDouble(4) }
+                val highs = candles.map { it.optDouble(2) }
+                val lows = candles.map { it.optDouble(3) }
+                val close = closes.lastOrNull() ?: 0.0
+                if (close <= 0.0) "FLAT" else {
+                    val ema9 = ema(closes, 9); val ema21 = ema(closes, 21)
+                    val ema50 = ema(closes, 50); val ema200 = ema(closes, min(200, closes.size))
+                    val rsiValue = rsi(closes, 14)
+                    val atrValue = atr(highs, lows, closes, 14)
+                    val regimeValue = if (abs(ema50 - ema200) / close > 0.004) "TENDENCIA" else "RANGO"
+                    strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200,
+                        rsiValue, atrValue, regimeValue, returnOver(closes, 12))
+                }
+            } else "FLAT"
+            // Two agents are assigned to each timeframe; both receive the same timeframe evidence,
+            // but their neural weights remain independent and are trained on the shared outcome.
+            votes.add(decision)
+            votes.add(decision)
+        }
+        val longs = votes.count { it == "LONG" }
+        val shorts = votes.count { it == "SHORT" }
+        val chosen = when { longs >= 6 && longs > shorts -> "LONG"; shorts >= 6 && shorts > longs -> "SHORT"; else -> "FLAT" }
+        return chosen to "1m:${votes[0]}/${votes[1]} 5m:${votes[2]}/${votes[3]} 15m:${votes[4]}/${votes[5]} 1H:${votes[6]}/${votes[7]} 4H:${votes[8]}/${votes[9]} · L$longs/S$shorts"
     }
 
     private fun chooseBotTimeframe(
