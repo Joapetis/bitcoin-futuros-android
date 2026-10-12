@@ -796,7 +796,9 @@ object NativeTradingEngine {
             loadedShorts >= 6 && loadedShorts > loadedLongs -> "SHORT"
             else -> "MIXTO"
         }
-        return CooperativeDecision(chosen, details.joinToString(" | ") + " | votos LONG=$loadedLongs SHORT=$loadedShorts",
+        val directionalVotes = loadedLongs + loadedShorts
+        val neutralVotes = (10 - directionalVotes).coerceAtLeast(0)
+        return CooperativeDecision(chosen, details.joinToString(" | ") + " | votos direccionales=${directionalVotes}/10 (LONG=$loadedLongs, SHORT=$loadedShorts, NEUTRALES=$neutralVotes)",
             featureSets.take(10).map { if (it.size == 12) it else DoubleArray(12) })
     }
 
