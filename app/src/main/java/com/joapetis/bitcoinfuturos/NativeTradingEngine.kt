@@ -98,7 +98,7 @@ object NativeTradingEngine {
                 .put("symbol", sym).put("balance", 100.0).put("initial", 100.0)
                 .put("price", 0.0).put("entry", 0.0).put("qty", 0.0).put("side", "FLAT")
                 .put("stop", 0.0).put("target", 0.0).put("trades", 0).put("wins", 0)
-                .put("losses", 0).put("learned", 0).put("risk", 5.0).put("leverage", 100)
+                .put("losses", 0).put("learned", 0).put("risk", 100.0).put("leverage", 100).put("enabled", sym != "SUI-USDT")
                 .put("injectedCapital", 0.0).put("recharges", 0).put("learningSamples", JSONArray()).put("lastBatchTrained", 0)
                 .put("lastCandle", 0L).put("botBar", "1H").put("nnBias", 0.0).put("nnTrend", 0.0).put("nnMomentum", 0.0)
                 .put("lastSignal", "Analizando mercado").put("history", JSONArray())
@@ -109,6 +109,14 @@ object NativeTradingEngine {
         startQuoteStreamsLocked()
     }
 
+    fun isBotEnabled(symbol: String): Boolean = synchronized(lock) { bots[symbol]?.optBoolean("enabled", symbol != "SUI-USDT") ?: false }
+    fun setBotEnabled(symbol: String, enabled: Boolean) = synchronized(lock) {
+        bots[symbol]?.put("enabled", enabled)
+        saveLocked()
+    }
+    fun enabledSymbols(): List<String> = synchronized(lock) { symbols.filter { bots[it]?.optBoolean("enabled", it != "SUI-USDT") == true } }
+    private fun sharedCapitalLocked(): Double = bots.values.sumOf { it.optDouble("balance", 100.0) }
+    private fun hasOpenPositionLocked(): Boolean = bots.values.any { it.optString("side", "FLAT") != "FLAT" }
     fun setRisk(symbol: String, risk: Double) = synchronized(lock) {
         bots[symbol]?.put("risk", risk.coerceIn(1.0, 100.0)); saveLocked()
     }
@@ -452,7 +460,7 @@ object NativeTradingEngine {
             b.put("lastSignal", "$strategy · $regime · RSI ${rsi.toInt()} · Señal $signal")
             val newCandle = prevCandleTime > b.optLong("lastCandle", 0L)
             if (newCandle) b.put("lastCandle", prevCandleTime)
-            val adaptiveBar = "5m" // El vídeo se centra en scalping y confirmación en 5 minutos
+            val adaptiveBar = "5m" // Temporalidad de scalping
             if (adaptiveBar != chosenBar) {
                 b.put("botBar", adaptiveBar).put("lastCandle", 0L)
                 b.put("lastSignal", strategy + " · temporalidad adaptativa " + chosenBar + " → " + adaptiveBar)
@@ -477,7 +485,7 @@ object NativeTradingEngine {
                     val barsHeld = max(1L, (prevCandleTime - b.optLong("entryCandle", prevCandleTime)) / when (chosenBar) { "15m" -> 900_000L; "4H" -> 14_400_000L; "1D" -> 86_400_000L; else -> HOUR_MS })
                     val funding = entryNotional * FUNDING_RATE_PER_8H * (barsHeld / 8.0)
                     val net = gross - fee - funding
-                    val balanceBefore = b.optDouble("balance")
+                    val balanceBefore = b.optDouble("balance")\n                    val portfolioBefore = sharedCapitalLocked()
                     val balanceAfter = max(0.0, balanceBefore + net)
                     b.put("balance", balanceAfter)
                     if (net > 0) b.put("wins", b.optInt("wins")+1) else b.put("losses", b.optInt("losses")+1)
@@ -511,7 +519,7 @@ object NativeTradingEngine {
                         .put("side", side).put("entry", entry).put("exit", exitPrice).put("qty", qty)
                         .put("entryNotional", entryNotional).put("gross", gross).put("fees", fee)
                         .put("funding", funding).put("pnl", net).put("balanceBefore", balanceBefore)
-                        .put("balanceAfter", balanceAfter).put("leverage", b.optInt("leverage", 1))
+                        .put("balanceAfter", balanceAfter).put("portfolioBefore", portfolioBefore).put("portfolioAfter", portfolioBefore + net).put("leverage", b.optInt("leverage", 1))
                         .put("riskPercent", b.optDouble("risk", 5.0)).put("stop", stop).put("target", target)
                         .put("strategy", b.optString("entryStrategy", strategy)).put("timeframe", chosenBar)
                         .put("predictedWin", b.optDouble("entryPredictedWin", 0.5))
@@ -530,7 +538,11 @@ object NativeTradingEngine {
                     }
                 }
             } else if (side == "FLAT" && newCandle && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
-                val riskCash = b.optDouble("balance") * b.optDouble("risk",5.0)/100.0
+                // Portfolio mode: all bots share equity; only one position may be open at a time.
+                // Profits/losses are booked into the trading bot's ledger and therefore compound across the shared pool.
+                if (hasOpenPositionLocked()) return
+                val portfolioCapital = sharedCapitalLocked()
+                val riskCash = portfolioCapital * b.optDouble("risk",100.0)/100.0
                 val stopDistance = max(atr*1.4, close*0.0008)
                 val targetDistance = atr*2.4
                 val estimatedRoundTripCostRate = 2.0 * (TAKER_FEE_RATE + SLIPPAGE_RATE) + FUNDING_RATE_PER_8H
@@ -541,7 +553,7 @@ object NativeTradingEngine {
                 // Once enough closes exist, the on-device online learner can veto weak setups.
                 val costsCovered = expectedMoveRate >= estimatedRoundTripCostRate * MIN_REWARD_TO_COST
                 val learnerAllows = sampleCount < MIN_LEARNED_TRADES || predictedWin >= MIN_PREDICTED_WIN
-                val maxNotional = b.optDouble("balance") * b.optInt("leverage",100)
+                val maxNotional = portfolioCapital * b.optInt("leverage",100)
                 val qty = min(riskCash / stopDistance, maxNotional / close)
                 if (costsCovered && learnerAllows && qty > 0 && qty.isFinite()) {
                     val executedEntry = close * (if (signal == "LONG") 1.0 + SLIPPAGE_RATE else 1.0 - SLIPPAGE_RATE)
@@ -580,7 +592,11 @@ object NativeTradingEngine {
     // Cada símbolo tiene una familia de señales propia; no se comparte un score genérico.
     // Estrategia de scalping inspirada en el vídeo: estructura/fractalidad, impulso-pullback-continuación,
     // giros por doble techo/suelo confirmado y filtro para no operar mercados sin estructura.
-    fun strategyName(symbol: String): String = "Scalping de estructura · continuación y giro"
+    fun strategyName(symbol: String): String = when (symbol) {
+        "AVAX-USDT" -> "Tendencia con filtro ATR · preservada"
+        "SUI-USDT" -> "Desactivado por pérdidas acumuladas"
+        else -> "Scalping de estructura · continuación y giro"
+    }
 
     private fun strategySignal(
         symbol:String, candles:List<JSONArray>, closes:List<Double>, highs:List<Double>, lows:List<Double>,
