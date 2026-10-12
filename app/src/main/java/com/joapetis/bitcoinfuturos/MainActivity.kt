@@ -183,7 +183,10 @@ class MainActivity : Activity() {
                 liveChart=null
                 chart()
                 NativeTradingEngine.requestChartCandles(selected,chartBar){handler.post{liveChart?.invalidate()}}
-                panel("Estrategia independiente",NativeTradingEngine.strategyName(b.symbol)+"\n"+b.status+"\nPrecio en vivo: "+NativeTradingEngine.liveQuoteSource()); cardBlock("Balance del bot",money(b.balance)+"    P/L "+money(b.pnl))
+                panel("Bitcoin · motor de 10 expertos",NativeTradingEngine.strategyName(b.symbol)+"\n"+b.status+"\nPrecio en vivo: "+NativeTradingEngine.liveQuoteSource()); cardBlock("Balance del bot",money(b.balance)+"    P/L "+money(b.pnl))
+                val news = NewsIntelligence.summary()
+                val sentimentLabel = if (news.sentiment > 0.15) "Positivo" else if (news.sentiment < -0.15) "Negativo" else "Neutro"
+                cardBlock("Inteligencia RSS · solo observación", "Titulares BTC relevantes: "+news.articles+" · Sentimiento: "+sentimentLabel+" ("+String.format(Locale.US,"%.2f",news.sentiment)+")\n"+news.latestTitle+"\nLas noticias no modifican las señales de entrada.")
                 cardBlock("Operación actual","Entrada "+(if(b.entry>0)String.format(Locale.US,"%.5f",b.entry)else "—")+"    ·    "+b.trades+" cierres")
                 controls(b.symbol,b.risk,b.leverage); actionButton("Volver a mercados"){page="Mercados";render()}
             }
