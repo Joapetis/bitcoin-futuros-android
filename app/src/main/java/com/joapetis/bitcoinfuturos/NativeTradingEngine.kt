@@ -924,11 +924,26 @@ object NativeTradingEngine {
         val tr=(start until c.size).map { max(h[it]-l[it], max(abs(h[it]-c[it-1]),abs(l[it]-c[it-1]))) }
         return tr.average().takeIf { it.isFinite() && it>0 } ?: c.last()*0.005
     }
+    private fun floatingPnl(b: JSONObject): Double {
+        val entry=b.optDouble("entry",0.0); val price=b.optDouble("price",0.0)
+        val side=b.optString("side","FLAT"); val qty=b.optDouble("qty",0.0)
+        return if(entry>0 && price>0 && qty>0 && side!="FLAT") (if(side=="LONG") price-entry else entry-price)*qty else 0.0
+    }
+
     private fun saveLocked() {
         if (!::app.isInitialized) return
         try {
-            val root=JSONObject().put("schemaVersion",1).put("savedAt",System.currentTimeMillis())
-            val arr=JSONArray(); symbols.forEach { bots[it]?.let(arr::put) }; root.put("bots",arr)
+            val savedAt = System.currentTimeMillis()
+            val arr=JSONArray(); symbols.forEach { bots[it]?.let(arr::put) }
+            val totalCapital = bots.values.sumOf { it.optDouble("balance",100.0) + floatingPnl(it) }
+            val totalPnl = bots.values.sumOf { it.optDouble("balance",100.0) - it.optDouble("initial",100.0) - it.optDouble("injectedCapital",0.0) + floatingPnl(it) }
+            val totalTrades = bots.values.sumOf { it.optInt("trades",0) }
+            val totalWins = bots.values.sumOf { it.optInt("wins",0) }
+            val totalLosses = bots.values.sumOf { it.optInt("losses",0) }
+            val root=JSONObject().put("schemaVersion",2).put("savedAt",savedAt)
+                .put("appVersion","0.9").put("totalCapital",totalCapital).put("totalNetPnl",totalPnl)
+                .put("totalTrades",totalTrades).put("totalWins",totalWins).put("totalLosses",totalLosses)
+                .put("bots",arr)
             val folder=File(app.filesDir,"CryptoFutures"); folder.mkdirs()
             val tmp=File(folder,"state-v1.json.tmp"); tmp.writeText(root.toString())
             val dst=File(folder,"state-v1.json")
