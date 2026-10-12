@@ -361,14 +361,52 @@ object NativeTradingEngine {
 
     fun setBackupFolder(uri: Uri): String = synchronized(lock) {
         try {
-            app.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            app.contentResolver.takePersistableUriPermission(uri, flags)
             backupTreeUri = uri
-            app.getSharedPreferences("backup_settings", Context.MODE_PRIVATE).edit().putString("tree_uri", uri.toString()).apply()
-            saveLocked()
-            "Carpeta seleccionada; respaldo automático activado."
+            app.getSharedPreferences("backup_settings", Context.MODE_PRIVATE).edit().putString("tree_uri", uri.toString()).putBoolean("asked", true).apply()
+            // Critical: archive and restore the old backup BEFORE any save can overwrite it.
+            archiveCurrentExternalBackupLocked()
+            val restored = restoreUserBackup()
+            if (restored.startsWith("Restauración completada")) {
+                "Respaldo antiguo restaurado automáticamente. " + restored
+            } else {
+                saveLocked()
+                "Carpeta configurada. No se encontró un respaldo válido; se creó uno nuevo. " + restored
+            }
         } catch (e: Exception) { "No se pudo acceder a la carpeta: " + (e.message ?: "permiso denegado") }
     }
-    fun backupFolderLabel(): String = if (backupTreeUri == null) "No seleccionada" else "Configurada · respaldo automático"
+    fun backupFolderLabel(): String = if (backupTreeUri == null) "No seleccionada · se solicitará acceso" else "Configurada · respaldo automático"
+
+    private fun archiveCurrentExternalBackupLocked() {
+        val tree = backupTreeUri ?: return
+        try {
+            val resolver = app.contentResolver
+            fun find(parentId: String, name: String): String? {
+                val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId)
+                resolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
+                    while (c.moveToNext()) if (c.getString(1) == name) return c.getString(0)
+                }
+                return null
+            }
+            val rootId = DocumentsContract.getTreeDocumentId(tree)
+            val cf = find(rootId, "CryptoFutures") ?: return
+            val backups = find(cf, "backups") ?: return
+            val latest = find(backups, "state-v1.json") ?: return
+            val latestUri = DocumentsContract.buildDocumentUriUsingTree(tree, latest)
+            val raw = resolver.openInputStream(latestUri)?.bufferedReader()?.use { it.readText() } ?: return
+            val stamp = JSONObject(raw).optLong("savedAt", System.currentTimeMillis())
+            val archiveDirId = find(backups, "archive") ?: run {
+                val dir = DocumentsContract.createDocument(resolver, DocumentsContract.buildDocumentUriUsingTree(tree, backups), DocumentsContract.Document.MIME_TYPE_DIR, "archive") ?: return
+                DocumentsContract.getDocumentId(dir)
+            }
+            val name = "backup-$stamp.json"
+            if (find(archiveDirId, name) == null) {
+                val out = DocumentsContract.createDocument(resolver, DocumentsContract.buildDocumentUriUsingTree(tree, archiveDirId), "application/json", name) ?: return
+                resolver.openOutputStream(out, "wt")?.bufferedWriter()?.use { it.write(raw) }
+            }
+        } catch (e: Exception) { lastError = "No se pudo archivar respaldo previo: " + (e.message ?: "error") }
+    }
 
     fun restoreUserBackup(): String = synchronized(lock) {
         val tree = backupTreeUri ?: return@synchronized "Selecciona primero la carpeta que contiene el respaldo."
