@@ -42,6 +42,17 @@ class MainActivity : Activity() {
         val service=Intent(this,BotKeepAliveService::class.java).setAction(BotKeepAliveService.ACTION_START)
         if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.O) startForegroundService(service) else startService(service)
         render(); handler.post(refreshRunnable)
+        handler.postDelayed({
+            if (NativeTradingEngine.shouldRequestBackupFolder()) {
+                NativeTradingEngine.markBackupPrompted()
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Configurar copia de seguridad")
+                    .setMessage("Para proteger el historial y el aprendizaje, selecciona la carpeta Documentos. La app creará Documentos/CryptoFutures y restaurará automáticamente el último respaldo válido antes de guardar nada.")
+                    .setNegativeButton("Ahora no", null)
+                    .setPositiveButton("Elegir Documentos") { _, _ -> openBackupFolderPicker() }
+                    .show()
+            }
+        }, 700)
     }
     private val refreshRunnable=object:Runnable { override fun run(){ if(::root.isInitialized){
         val snapshots=NativeTradingEngine.snapshots()
@@ -241,13 +252,9 @@ class MainActivity : Activity() {
                 cardBlock("IA neuronal local adaptativa","Red neuronal multicapa 12-10-1: tendencia, momentum en tres ventanas, volatilidad ATR, volumen relativo, RSI, alineación EMA, eficiencia direccional, cuerpo de vela y tendencia larga. Se ejecuta en el móvil y conserva sus pesos por bot. Modelo experimental; no garantiza rentabilidad.")
                 cardBlock("General","Modo oscuro · Español\nDatos públicos de mercado · Sin claves privadas\nSolo simulación: no se envían órdenes reales. La viabilidad debe comprobarse con backtesting temporal y paper trading.")
                 panel("Respaldos entre versiones","Guarda el aprendizaje, saldos simulados e historial fuera de los datos privados de la app.")
-                cardBlock("Carpeta de respaldo",NativeTradingEngine.backupFolderLabel()+"\nSe crea CryptoFutures/backups/state-v1.json dentro de la carpeta elegida.")
-                actionButton("Seleccionar carpeta para respaldos") {
-                    val intent=Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                    startActivityForResult(intent,backupPicker)
-                }
-                actionButton("Restaurar bots desde esta carpeta") {
+                cardBlock("Carpeta de respaldo",NativeTradingEngine.backupFolderLabel()+"\nRuta recomendada: Documentos/CryptoFutures. El último respaldo se restaura antes de actualizarlo. Se conservan copias históricas en backups/archive.")
+                actionButton("Seleccionar Documentos para respaldos") { openBackupFolderPicker() }
+                actionButton("Restaurar último respaldo") {
                     val message=NativeTradingEngine.restoreUserBackup()
                     Toast.makeText(this,message,Toast.LENGTH_LONG).show()
                     updateScreen()
@@ -393,6 +400,14 @@ class MainActivity : Activity() {
     private fun actionButton(label:String,action:()->Unit){content.addView(Button(this).apply{text=label;isAllCaps=false;textSize=13f;setTextColor(Color.WHITE);setBackgroundColor(blue);setOnClickListener{action()}},LinearLayout.LayoutParams(-1,-2))}
     private fun text(value:String,size:Float,color:Int,bold:Boolean)=TextView(this).apply{text=value;textSize=size;setTextColor(color);if(bold)setTypeface(typeface,Typeface.BOLD);setPadding(0,dp(4),0,dp(4))}
     @Deprecated("Deprecated in Android API")
+    private fun openBackupFolderPicker() {
+        val intent=Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        try {
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ADocuments"))
+        } catch (_: Exception) {}
+        startActivityForResult(intent,backupPicker)
+    }
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
         if(requestCode==backupPicker && resultCode==RESULT_OK) {
