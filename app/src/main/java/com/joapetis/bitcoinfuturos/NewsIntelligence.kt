@@ -60,8 +60,9 @@ object NewsIntelligence {
                 val items = byKey.values.sortedByDescending { it.optLong("publishedAt", 0L) }.take(MAX_ITEMS)
                 val arr = JSONArray()
                 items.forEach { arr.put(it) }
-                val avg = if (items.isEmpty()) 0.0 else items.take(40).map { it.optDouble("sentiment", 0.0) }.average()
-                val latest = items.firstOrNull()?.optString("title").orEmpty().ifBlank { "Sin titulares RSS disponibles" }
+                val relevant = items.filter { it.optBoolean("btcRelevant", false) }
+                val avg = if (relevant.isEmpty()) 0.0 else relevant.take(40).map { it.optDouble("sentiment", 0.0) }.average()
+                val latest = relevant.firstOrNull()?.optString("title").orEmpty().ifBlank { "Sin titulares RSS relevantes para BTC" }
                 val nowSaved = System.currentTimeMillis()
                 val root = JSONObject().put("schemaVersion", 1).put("updatedAt", nowSaved).put("items", arr)
                 context?.let { ctx ->
@@ -127,7 +128,8 @@ object NewsIntelligence {
                                     val published = parseDate(dateText)
                                     val text = "$cleanTitle $description".lowercase(Locale.US)
                                     val score = sentiment(text)
-                                    val key = (link.ifBlank { cleanTitle } + "|" + feed.name).hashCode().toString()
+                                    val normalizedTitle = cleanTitle.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), " ").trim()
+                                    val key = normalizedTitle.hashCode().toString()
                                     out.add(JSONObject().put("key", key).put("source", feed.name).put("title", cleanTitle.take(240))
                                         .put("link", link.take(1000)).put("publishedAt", published).put("fetchedAt", System.currentTimeMillis())
                                         .put("sentiment", score).put("btcRelevant", isBtcRelevant(text)))
@@ -172,7 +174,8 @@ object NewsIntelligence {
 
     private fun load() {
         val arr = loadItems()
-        val avg = if (arr.length() == 0) 0.0 else (0 until minOf(40, arr.length())).map { arr.optJSONObject(it)?.optDouble("sentiment", 0.0) ?: 0.0 }.average()
-        summary = Summary(arr.length(), avg.coerceIn(-1.0, 1.0), arr.optJSONObject(0)?.optString("title").orEmpty().ifBlank { "Aún no hay noticias RSS" }, 0L)
+        val relevant = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.filter { it.optBoolean("btcRelevant", false) }
+        val avg = if (relevant.isEmpty()) 0.0 else relevant.take(40).map { it.optDouble("sentiment", 0.0) }.average()
+        summary = Summary(relevant.size, avg.coerceIn(-1.0, 1.0), relevant.firstOrNull()?.optString("title").orEmpty().ifBlank { "Aún no hay noticias RSS relevantes para BTC" }, 0L)
     }
 }
