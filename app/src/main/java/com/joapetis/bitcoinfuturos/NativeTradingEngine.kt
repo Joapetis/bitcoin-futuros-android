@@ -537,7 +537,7 @@ object NativeTradingEngine {
                             .put("balanceAfter", refill).put("pnl", 0.0))
                     }
                 }
-            } else if (side == "FLAT" && newCandle && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
+            } else if (side == "FLAT" && b.optBoolean("enabled", symbol != "SUI-USDT") && newCandle && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
                 // Portfolio mode: all bots share equity; only one position may be open at a time.
                 // Profits/losses are booked into the trading bot's ledger and therefore compound across the shared pool.
                 if (hasOpenPositionLocked()) return
