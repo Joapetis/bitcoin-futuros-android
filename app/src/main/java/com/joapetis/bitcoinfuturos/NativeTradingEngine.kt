@@ -417,16 +417,43 @@ object NativeTradingEngine {
             val file = find(backups, "state-v1.json") ?: return@synchronized "No hay archivo state-v1.json."
             val uri = DocumentsContract.buildDocumentUriUsingTree(tree, file)
             val raw = resolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: return@synchronized "No se pudo leer el archivo."
-            val arr = JSONObject(raw).optJSONArray("bots") ?: return@synchronized "El respaldo no es válido."
+            val backupRoot = JSONObject(raw)
+            val arr = backupRoot.optJSONArray("bots") ?: return@synchronized "El respaldo no es válido."
             var count = 0
             for (i in 0 until arr.length()) {
                 val b = arr.optJSONObject(i) ?: continue
                 val symbol = b.optString("symbol")
-                if (symbol in symbols) { bots[symbol] = b; count++ }
+                if (symbol in legacySymbols) { bots[symbol] = b; count++ }
             }
             if (count == 0) return@synchronized "No se encontraron bots compatibles."
+            val preferences = backupRoot.optJSONObject("preferences")
+            if (preferences != null) {
+                val prefNames = preferences.keys()
+                while (prefNames.hasNext()) {
+                    val prefName = prefNames.next()
+                    val values = preferences.optJSONObject(prefName) ?: continue
+                    val editor = app.getSharedPreferences(prefName, Context.MODE_PRIVATE).edit().clear()
+                    val keys = values.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        when (val value = values.opt(key)) {
+                            is Boolean -> editor.putBoolean(key, value)
+                            is Int -> editor.putInt(key, value)
+                            is Long -> editor.putLong(key, value)
+                            is Double -> editor.putFloat(key, value.toFloat())
+                            is String -> editor.putString(key, value)
+                            is JSONArray -> editor.putStringSet(key, (0 until value.length()).map { value.optString(it) }.toSet())
+                        }
+                    }
+                    editor.apply()
+                }
+                backupTreeUri = app.getSharedPreferences("backup_settings", Context.MODE_PRIVATE)
+                    .getString("tree_uri", null)?.let { Uri.parse(it) }
+            }
+            val newsState = backupRoot.optString("newsState", "")
+            if (newsState.isNotBlank()) File(app.filesDir, "CryptoFutures/news-v1.json").writeText(newsState)
             saveLocked()
-            "Restauración completada: $count bots recuperados."
+            "Restauración completada: $count bots y sus parámetros/modelos; ajustes y noticias recuperados."
         } catch (e: Exception) { "No se pudo restaurar: " + (e.message ?: "error de lectura") }
     }
     private fun saveUserBackup(root: JSONObject) {
@@ -1095,10 +1122,25 @@ object NativeTradingEngine {
             val totalTrades = bots.values.sumOf { it.optInt("trades",0) }
             val totalWins = bots.values.sumOf { it.optInt("wins",0) }
             val totalLosses = bots.values.sumOf { it.optInt("losses",0) }
-            val root=JSONObject().put("schemaVersion",2).put("savedAt",savedAt)
-                .put("appVersion","0.9").put("totalCapital",totalCapital).put("totalNetPnl",totalPnl)
+            val preferences = JSONObject()
+            listOf("backup_settings", "app_settings", "settings", "user_prefs").forEach { prefName ->
+                val values = app.getSharedPreferences(prefName, Context.MODE_PRIVATE).all
+                val savedValues = JSONObject()
+                values.forEach { (key, value) ->
+                    when (value) {
+                        is String, is Boolean, is Int, is Long, is Float -> savedValues.put(key, value)
+                        is Set<*> -> savedValues.put(key, JSONArray(value.filterIsInstance<String>()))
+                    }
+                }
+                preferences.put(prefName, savedValues)
+            }
+            val newsFile = File(app.filesDir, "CryptoFutures/news-v1.json")
+            val newsState = if (newsFile.exists()) newsFile.readText() else ""
+            val root=JSONObject().put("schemaVersion",3).put("savedAt",savedAt)
+                .put("appVersion","0.10").put("totalCapital",totalCapital).put("totalNetPnl",totalPnl)
                 .put("totalTrades",totalTrades).put("totalWins",totalWins).put("totalLosses",totalLosses)
-                .put("bots",arr)
+                .put("bots",arr).put("preferences", preferences).put("newsState", newsState)
+                .put("backupContents", "bot_parameters+models+trade_history+preferences+news_state")
             val folder=File(app.filesDir,"CryptoFutures"); folder.mkdirs()
             val tmp=File(folder,"state-v1.json.tmp"); tmp.writeText(root.toString())
             val dst=File(folder,"state-v1.json")
