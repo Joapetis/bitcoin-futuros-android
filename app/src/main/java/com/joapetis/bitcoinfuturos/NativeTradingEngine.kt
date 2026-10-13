@@ -93,6 +93,11 @@ object NativeTradingEngine {
                 }
             } catch (_: Exception) { lastError = "Estado guardado dañado; se inicia recuperación" }
         }
+        // Migrate unsafe legacy settings without touching the saved position, history or learned weights.
+        bots["BTC-USDT"]?.let { btc ->
+            if (btc.optDouble("risk", 5.0) > 5.0) btc.put("risk", 5.0)
+            if (btc.optInt("leverage", 10) > 10) btc.put("leverage", 10)
+        }
         symbols.forEach { sym ->
             if (!bots.containsKey(sym)) bots[sym] = JSONObject()
                 .put("symbol", sym).put("balance", 100.0).put("initial", 100.0)
