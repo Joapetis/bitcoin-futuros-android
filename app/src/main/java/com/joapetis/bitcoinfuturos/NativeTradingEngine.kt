@@ -434,7 +434,15 @@ object NativeTradingEngine {
             for (i in 0 until arr.length()) {
                 val b = arr.optJSONObject(i) ?: continue
                 val symbol = b.optString("symbol")
-                if (symbol in legacySymbols) { bots[symbol] = b; count++ }
+                if (symbol in legacySymbols) {
+                    if (symbol == "BTC-USDT") {
+                        // Migrate restored legacy settings too; retain position, history and model data.
+                        if (b.optDouble("risk", 5.0) > 5.0) b.put("risk", 5.0)
+                        if (b.optInt("leverage", 10) > 10) b.put("leverage", 10)
+                    }
+                    bots[symbol] = b
+                    count++
+                }
             }
             if (count == 0) return@synchronized "No se encontraron bots compatibles."
             val preferences = backupRoot.optJSONObject("preferences")
@@ -1163,9 +1171,3 @@ object NativeTradingEngine {
                 val backup=File(ext,"CryptoFutures"); backup.mkdirs()
                 File(backup,"state-v1.json.tmp").writeText(root.toString())
                 File(backup,"state-v1.json.tmp").renameTo(File(backup,"state-v1.json"))
-                val log=File(backup,"events.csv")
-                if(!log.exists()) log.writeText("timestamp,symbol,price,balance,side,trades,learned\n")
-                symbols.forEach { s ->
-                    val b=bots[s]!!
-                    log.appendText("${System.currentTimeMillis()},$s,${b.optDouble("price")},${b.optDouble("balance")},${b.optString("side")},${b.optInt("trades")},${b.optInt("learned")}\n")
-                }
