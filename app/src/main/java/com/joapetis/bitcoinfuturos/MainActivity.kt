@@ -278,7 +278,7 @@ class MainActivity : Activity() {
             "Ajustes" -> {
                 panel("Ajustes","Configuración de la aplicación")
                 cardBlock("Capital compartido y gestión de riesgo",
-                    "Los diez expertos comparten el capital de BTC/USDT y gestionan una sola posición simulada. El resultado neto de cada operación modifica el saldo disponible. El riesgo por operación se configura abajo; cualquier simulación puede perder capital.")
+                    "Los diez expertos comparten el capital de BTC/USDT y una única posición simulada. Cada temporalidad puede activar la entrada sin consenso mínimo. Se limita el riesgo teórico a 5% y el apalancamiento simulado a x10; esto no garantiza rentabilidad.")
                 panel("Mercado activo","Solo Bitcoin · BTC/USDT")
                 cardBlock("Motor cooperativo","Los expertos se reparten 1m, 5m, 15m, 1H y 4H, comparten una operación y aprenden de su resultado.")
                 val btcSettings = bots.firstOrNull { it.symbol == "BTC-USDT" } ?: bots.first()
@@ -308,7 +308,7 @@ class MainActivity : Activity() {
         val entry = state.optDouble("entry", 0.0)
         val qty = state.optDouble("qty", 0.0)
         val floating = state.optDouble("floatingPnl", 0.0)
-        val status = if (!running) "PAUSADO · pulsa Reanudar en Inicio" else if (side == "FLAT") "ACTIVO · esperando una señal de la estrategia base v0.5" else "OPERACIÓN ABIERTA · " + side
+        val status = if (!running) "PAUSADO · pulsa Reanudar en Inicio" else if (side == "FLAT") "ACTIVO · esperando señal independiente de cualquier temporalidad" else "OPERACIÓN ABIERTA · " + side
         operationStatusView?.text = status + "\\nBTC/USDT · " + (if (price > 0) String.format(Locale.US, "%,.2f USDT", price) else "esperando cotización")
         operationStatusView?.setTextColor(if (!running) Color.YELLOW else if (side == "FLAT") muted else green)
         val positionText = if (side == "FLAT") {
@@ -322,7 +322,7 @@ class MainActivity : Activity() {
         }
         operationPositionView?.text = positionText
         operationExpertsView?.text = "Consenso observado: " + state.optString("expertDirection", "MIXTO") + "\\n" + state.optString("expertConsensusDetail", "Esperando las cinco temporalidades") +
-            "\\n\\nLa señal base v0.5 decide la entrada. Los votos adicionales se registran y aprenden, pero no bloquean una señal base válida."
+            "\\n\\nCada temporalidad ejecuta la estrategia BTC v0.5 por separado. Una señal direccional de cualquier temporalidad puede abrir la única posición compartida; los votos no son un filtro de entrada."
         val activity = NativeTradingEngine.jointOperationActivity().take(40)
         val signature = activity.joinToString("|") { it.optLong("time").toString() + ":" + it.optString("type") + ":" + it.optString("message") }
         if (forceActivity || signature != operationActivitySignature) {
@@ -383,11 +383,11 @@ class MainActivity : Activity() {
         }
     }
     private fun controls(symbol:String,risk:Double,leverage:Int){
-        cardBlock("Riesgo por operación",risk.toInt().toString()+"% del balance como riesgo teórico")
-        val bar=SeekBar(this).apply{max=100;progress=risk.toInt().coerceIn(1,100)}; content.addView(bar)
-        content.addView(text("100% = riesgo teórico de todo el saldo en el stop; el capital simulado puede perderse.",10f,muted,false))
+        cardBlock("Riesgo máximo por operación",risk.toInt().toString()+"% del balance como riesgo teórico (máximo aplicado: 5%)")
+        val bar=SeekBar(this).apply{max=5;progress=risk.toInt().coerceIn(1,5)}; content.addView(bar)
+        content.addView(text("Límite de seguridad: hasta el 5% de riesgo teórico por entrada. La simulación puede perder capital.",10f,muted,false))
         bar.setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{override fun onProgressChanged(s:SeekBar?,p:Int,u:Boolean){if(u)NativeTradingEngine.setRisk(symbol,p.coerceAtLeast(1).toDouble())};override fun onStartTrackingTouch(s:SeekBar?){};override fun onStopTrackingTouch(s:SeekBar?){}})
-        content.addView(text("Apalancamiento simulado",13f,Color.WHITE,true)); val levs=listOf(1,2,3,5,10,20,50,75,100); val sp=Spinner(this)
+        content.addView(text("Apalancamiento simulado",13f,Color.WHITE,true)); val levs=listOf(1,2,3,5,10); val sp=Spinner(this)
         sp.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,levs.map{"x"+it});sp.setSelection(levs.indexOf(leverage).coerceAtLeast(0))
         sp.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onNothingSelected(p:AdapterView<*>?){};override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){NativeTradingEngine.setLeverage(symbol,levs[pos])}}
         content.addView(sp)
@@ -499,4 +499,3 @@ class MainActivity : Activity() {
         }
     }
     override fun onDestroy(){handler.removeCallbacks(refreshRunnable);super.onDestroy()}
-}
