@@ -723,8 +723,8 @@ object NativeTradingEngine {
      * unchanged legacy strategy's signal on the bot's active timeframe.
      */
     /**
-     * Ten distinct cooperative roles: structure and momentum on five BTC timeframes.
-     * The base v0.5 signal controls entries; experts provide collaboration, telemetry and learning.
+     * Ten cooperative votes: two agents apply the same v0.5 strategy on each of five BTC timeframes.
+     * Neutral is a valid vote; missing data is reported separately.
      */
     private fun cooperativeDecision(symbol: String, primaryBar: String, primaryCandles: List<JSONArray>): CooperativeDecision {
         val bars = listOf("1m", "5m", "15m", "1H", "4H")
@@ -742,7 +742,7 @@ object NativeTradingEngine {
             } catch (_: Exception) { null }
             if (candles == null || candles.size < 60) {
                 signals.add("FLAT"); signals.add("FLAT")
-                details.add("$bar: sin datos")
+                details.add("$bar: SIN DATOS (2 votos no evaluables)")
                 featureSets.add(DoubleArray(12)); featureSets.add(DoubleArray(12))
                 continue
             }
@@ -752,7 +752,7 @@ object NativeTradingEngine {
             val close = closes.lastOrNull() ?: 0.0
             if (close <= 0.0) {
                 signals.add("FLAT"); signals.add("FLAT")
-                details.add("$bar: precio inválido")
+                details.add("$bar: PRECIO INVÁLIDO (2 votos no evaluables)")
                 featureSets.add(DoubleArray(12)); featureSets.add(DoubleArray(12))
                 continue
             }
@@ -766,11 +766,9 @@ object NativeTradingEngine {
             val regimeValue = if (abs(ema50 - ema200) / close > 0.004) "TENDENCIA" else "RANGO"
             val structure = strategySignal(symbol, candles, closes, highs, lows, ema9, ema21, ema50, ema200,
                 rsiValue, atrValue, regimeValue, returns12)
-            val momentum = when {
-                ema9 > ema21 && ema21 > ema50 && returns3 > 0.0005 && returns12 > 0.001 && rsiValue in 50.0..80.0 -> "LONG"
-                ema9 < ema21 && ema21 < ema50 && returns3 < -0.0005 && returns12 < -0.001 && rsiValue in 20.0..50.0 -> "SHORT"
-                else -> "FLAT"
-            }
+            // Both agents on each timeframe use the same v0.5 strategy.
+            // Avoid a second, stricter momentum rule that leaves valid strategy votes neutral.
+            val momentum = structure
             val volumes = candles.map { it.optDouble(5) }
             val volNow = volumes.lastOrNull() ?: 0.0
             val volAvg = volumes.takeLast(21).dropLast(1).average().takeIf { it > 0.0 } ?: volNow
