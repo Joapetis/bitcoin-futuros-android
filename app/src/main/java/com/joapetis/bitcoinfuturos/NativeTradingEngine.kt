@@ -24,7 +24,7 @@ import kotlin.math.sqrt
 
 data class CandleSnapshot(val time: Long, val open: Double, val high: Double, val low: Double, val close: Double, val volume: Double)
 
-private data class CooperativeDecision(val direction: String, val detail: String, val expertFeatures: List<DoubleArray>, val signalBar: String = "1H")
+private data class CooperativeDecision(val direction: String, val detail: String, val expertFeatures: List<DoubleArray>, val signalBar: String = "1H", val signalCandleTime: Long = 0L)
 
 data class BotSnapshot(
     val symbol: String, val balance: Double, val price: Double, val pnl: Double,
@@ -726,7 +726,7 @@ object NativeTradingEngine {
                             .put("balanceAfter", refill).put("pnl", 0.0))
                     }
                 }
-            } else if (side == "FLAT" && b.optBoolean("enabled", symbol != "SUI-USDT") && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != prevCandleTime) {
+            } else if (side == "FLAT" && b.optBoolean("enabled", symbol != "SUI-USDT") && signal != "FLAT" && b.optDouble("balance") > 0.5 && b.optLong("lastEntryCandle", -1L) != (if (cooperative.direction == signal) cooperative.signalCandleTime else prevCandleTime)) {
                 // Parallel positions use a separate share of the common portfolio per enabled bot.
                 val allocatedCapital = sharedCapitalLocked()
                 val riskCash = allocatedCapital * b.optDouble("risk",5.0)/100.0
@@ -747,7 +747,7 @@ object NativeTradingEngine {
                     val stop = if(signal=="LONG") executedEntry-stopDistance else executedEntry+stopDistance
                     val target = if(signal=="LONG") executedEntry+targetDistance else executedEntry-targetDistance
                     b.put("side",signal).put("entry",executedEntry).put("qty",qty).put("stop",stop).put("target",target)
-                        .put("lastEntryCandle",prevCandleTime).put("entryCandle",prevCandleTime)
+                        .put("lastEntryCandle", if (cooperative.direction == signal) cooperative.signalCandleTime else prevCandleTime).put("entryCandle",prevCandleTime)
                         .put("entryTime", System.currentTimeMillis()).put("entryStrategy", strategy)
                         .put("maxFavorablePrice", executedEntry).put("maxAdversePrice", executedEntry)
                         .put("trailingActive", false).put("entryAtr", atr)
@@ -782,6 +782,7 @@ object NativeTradingEngine {
         val details = mutableListOf<String>()
         val featureSets = mutableListOf<DoubleArray>()
         val timeframeSignals = linkedMapOf<String, String>()
+        val timeframeCandleTimes = linkedMapOf<String, Long>()
         var loadedLongs = 0
         var loadedShorts = 0
         for (bar in bars) {
@@ -833,6 +834,7 @@ object NativeTradingEngine {
                 ((ema50 - ema200) / close * 100.0).coerceIn(-3.0, 3.0))
             signals.add(structure); signals.add(momentum)
             timeframeSignals[bar] = structure
+            timeframeCandleTimes[bar] = candles.lastOrNull()?.optLong(0) ?: 0L
             featureSets.add(features); featureSets.add(features.copyOf())
             if (structure == "LONG") loadedLongs++ else if (structure == "SHORT") loadedShorts++
             if (momentum == "LONG") loadedLongs++ else if (momentum == "SHORT") loadedShorts++
@@ -846,7 +848,7 @@ object NativeTradingEngine {
         val directionalVotes = loadedLongs + loadedShorts
         val neutralVotes = (10 - directionalVotes).coerceAtLeast(0)
         return CooperativeDecision(chosen, details.joinToString(" | ") + " | análisis independientes: LONG=$loadedLongs, SHORT=$loadedShorts, NEUTRALES=$neutralVotes; señal individual=$chosen en $signalBar",
-            featureSets.take(10).map { if (it.size == 12) it else DoubleArray(12) }, signalBar)
+            featureSets.take(10).map { if (it.size == 12) it else DoubleArray(12) }, signalBar, timeframeCandleTimes[signalBar] ?: primaryCandles.lastOrNull()?.optLong(0) ?: 0L)
     }
 
     private fun chooseBotTimeframe(
@@ -1163,11 +1165,3 @@ object NativeTradingEngine {
                 .put("totalTrades",totalTrades).put("totalWins",totalWins).put("totalLosses",totalLosses)
                 .put("bots",arr).put("preferences", preferences).put("newsState", newsState)
                 .put("backupContents", "bot_parameters+models+trade_history+preferences+news_state")
-            val folder=File(app.filesDir,"CryptoFutures"); folder.mkdirs()
-            val tmp=File(folder,"state-v1.json.tmp"); tmp.writeText(root.toString())
-            val dst=File(folder,"state-v1.json")
-            if(!tmp.renameTo(dst)) { dst.writeText(root.toString()); tmp.delete() }
-            app.getExternalFilesDir(null)?.let { ext ->
-                val backup=File(ext,"CryptoFutures"); backup.mkdirs()
-                File(backup,"state-v1.json.tmp").writeText(root.toString())
-                File(backup,"state-v1.json.tmp").renameTo(File(backup,"state-v1.json"))
