@@ -417,9 +417,15 @@ object NativeTradingEngine {
                 }
                 return null
             }
-            val cf = find(DocumentsContract.getTreeDocumentId(tree), "CryptoFutures") ?: return@synchronized "No encuentro CryptoFutures."
-            val backups = find(cf, "backups") ?: return@synchronized "No encuentro la carpeta backups."
-            val file = find(backups, "state-v1.json") ?: return@synchronized "No hay archivo state-v1.json."
+            val rootId = DocumentsContract.getTreeDocumentId(tree)
+            val cf = find(rootId, "CryptoFutures")
+            val backups = cf?.let { find(it, "backups") }
+            // Accept the user's uploaded state-v1.json directly in the selected folder,
+            // as well as the app's normal Documents/CryptoFutures/backups location.
+            val file = find(rootId, "state-v1.json")
+                ?: cf?.let { find(it, "state-v1.json") }
+                ?: backups?.let { find(it, "state-v1.json") }
+                ?: return@synchronized "No hay state-v1.json en la carpeta elegida ni en CryptoFutures/backups."
             val uri = DocumentsContract.buildDocumentUriUsingTree(tree, file)
             val raw = resolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: return@synchronized "No se pudo leer el archivo."
             val backupRoot = JSONObject(raw)
@@ -1163,8 +1169,3 @@ object NativeTradingEngine {
                     val b=bots[s]!!
                     log.appendText("${System.currentTimeMillis()},$s,${b.optDouble("price")},${b.optDouble("balance")},${b.optString("side")},${b.optInt("trades")},${b.optInt("learned")}\n")
                 }
-            }
-            saveUserBackup(root)
-        } catch(e: Exception) { lastError="No se pudo guardar: ${e.message}".take(120) }
-    }
-}
