@@ -24,7 +24,7 @@ import kotlin.math.sqrt
 
 data class CandleSnapshot(val time: Long, val open: Double, val high: Double, val low: Double, val close: Double, val volume: Double)
 
-private data class CooperativeDecision(val direction: String, val detail: String, val expertFeatures: List<DoubleArray>)
+private data class CooperativeDecision(val direction: String, val detail: String, val expertFeatures: List<DoubleArray>, val signalBar: String = "1H")
 
 data class BotSnapshot(
     val symbol: String, val balance: Double, val price: Double, val pnl: Double,
@@ -735,7 +735,8 @@ object NativeTradingEngine {
                         .put("entryPredictedWin", predictedWin)
                         .put("entryFeatures", JSONArray().also { arr -> features.forEach { arr.put(it) } })
                         .put("entryExpertFeatures", JSONArray().also { outer -> cooperative.expertFeatures.forEach { fs -> outer.put(JSONArray().also { inner -> fs.forEach { inner.put(it) } }) } })
-                    recordExpertActivityLocked(b, "APERTURA", "Entrada $signal · estrategia base v0.5 · diez expertos comparten una sola posición; consenso=${cooperative.direction}", executedEntry)
+                    b.put("entrySignalTimeframe", if (baseSignal == signal) chosenBar else cooperative.signalBar)
+                    recordExpertActivityLocked(b, "APERTURA", "Entrada $signal · temporalidad=${b.optString("entrySignalTimeframe", chosenBar)} · señal individual v0.5; los demás expertos continúan observando y aprenderán del resultado compartido", executedEntry)
                 } else {
                     b.put("lastSignal", "$strategy · Señal base $signal, entrada filtrada por costes/IA (${(predictedWin*100).toInt()}%)"); recordExpertActivityLocked(b, "FILTRO", "Señal base $signal no ejecutada: costesCubiertos=$costsCovered · probabilidad estimada=${(predictedWin*100).toInt()}%", close)
                 }
@@ -761,6 +762,7 @@ object NativeTradingEngine {
         val signals = mutableListOf<String>()
         val details = mutableListOf<String>()
         val featureSets = mutableListOf<DoubleArray>()
+        val timeframeSignals = linkedMapOf<String, String>()
         var loadedLongs = 0
         var loadedShorts = 0
         for (bar in bars) {
@@ -811,20 +813,21 @@ object NativeTradingEngine {
                 alignment, directionalEfficiency(closes, 12), body,
                 ((ema50 - ema200) / close * 100.0).coerceIn(-3.0, 3.0))
             signals.add(structure); signals.add(momentum)
+            timeframeSignals[bar] = structure
             featureSets.add(features); featureSets.add(features.copyOf())
             if (structure == "LONG") loadedLongs++ else if (structure == "SHORT") loadedShorts++
             if (momentum == "LONG") loadedLongs++ else if (momentum == "SHORT") loadedShorts++
             details.add("$bar: estructura=$structure · impulso=$momentum")
         }
-        val chosen = when {
-            loadedLongs >= 6 && loadedLongs > loadedShorts -> "LONG"
-            loadedShorts >= 6 && loadedShorts > loadedLongs -> "SHORT"
-            else -> "MIXTO"
-        }
+        // Votes are telemetry only. Any individual timeframe can provide the entry signal.
+        // Prefer the shortest timeframe with a directional v0.5 signal.
+        val signalBar = listOf("1m", "5m", "15m", "1H", "4H")
+            .firstOrNull { timeframeSignals[it] == "LONG" || timeframeSignals[it] == "SHORT" } ?: primaryBar
+        val chosen = timeframeSignals[signalBar]?.takeIf { it == "LONG" || it == "SHORT" } ?: "FLAT"
         val directionalVotes = loadedLongs + loadedShorts
         val neutralVotes = (10 - directionalVotes).coerceAtLeast(0)
-        return CooperativeDecision(chosen, details.joinToString(" | ") + " | votos direccionales=${directionalVotes}/10 (LONG=$loadedLongs, SHORT=$loadedShorts, NEUTRALES=$neutralVotes)",
-            featureSets.take(10).map { if (it.size == 12) it else DoubleArray(12) })
+        return CooperativeDecision(chosen, details.joinToString(" | ") + " | análisis independientes: LONG=$loadedLongs, SHORT=$loadedShorts, NEUTRALES=$neutralVotes; señal individual=$chosen en $signalBar",
+            featureSets.take(10).map { if (it.size == 12) it else DoubleArray(12) }, signalBar)
     }
 
     private fun chooseBotTimeframe(
