@@ -402,7 +402,7 @@ object NativeTradingEngine {
             try {
                 val parsed = fetchCandles(symbol, bar)?.mapNotNull { row ->
                     if (row.length() < 6) null else CandleSnapshot(row.optLong(0), row.optDouble(1), row.optDouble(2), row.optDouble(3), row.optDouble(4), row.optDouble(5))
-                }
+                }?.let { closedCandles(it, bar, System.currentTimeMillis()) }
                 if (!parsed.isNullOrEmpty()) synchronized(lock) { chartCandleCache[key] = parsed.takeLast(220) }
             } catch (_: Exception) {}
             finally { chartRequests.remove(key); try { onLoaded() } catch (_: Exception) {} }
