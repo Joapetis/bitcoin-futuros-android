@@ -3,6 +3,8 @@
 
 [English version below](#bitcoin-futures-simulator-)
 
+**Registro de cambios / Changelog:** [CHANGELOG.md](CHANGELOG.md)
+
 Este proyecto es un simulador open-source para experimentar con estrategias de trading de Bitcoin, datos de mercado, análisis multi-temporal y asistencia opcional de IA en el dispositivo. La estrategia principal actual es **Swing**: busca oportunidades de continuación de tendencia y utiliza reversión a la media únicamente en condiciones de rango.
 
 > **Estado del proyecto:** experimental y en desarrollo. Las compilaciones correctas no demuestran rentabilidad. No se presenta como una estrategia validada ni como un sistema listo para operar con dinero real.
