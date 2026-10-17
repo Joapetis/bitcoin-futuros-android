@@ -1,7 +1,7 @@
 name: Build Android APK
 on:
   push:
-    branches: [ "main", "fix/legacy-trend-strategy-backup-verification" ]
+    branches: [ "main" ]
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,9 +28,70 @@ jobs:
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Compilar APK debug
         run: gradle assembleDebug
-      - name: Guardar APK
+      - name: Guardar APK Alpha 0.1
         uses: actions/upload-artifact@v4
         with:
           name: bitcoin-futures-simulator-alpha-0.1-android
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
+
+  cleanup-legacy-history:
+    needs: build
+    if: "${{ github.event_name == 'push' && github.event.before == '829cf0d920db2848e0d1cc7e4adc649f448b2c8f' && github.event.head_commit.message == 'chore: one-time cleanup of previous build history' }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Retirar ramas y compilaciones antiguas (una sola vez)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+
+          echo "Removing obsolete branches, preserving main."
+          mapfile -t branch_names < <(gh api --paginate "repos/$repo/branches?per_page=100" --jq '.[].name')
+          for branch in "${branch_names[@]}"; do
+            if [[ "$branch" == "main" ]]; then
+              continue
+            fi
+            encoded_branch="$(printf '%s' "$branch" | jq -sRr @uri)"
+            gh api --method DELETE "repos/$repo/git/refs/heads/$encoded_branch" >/dev/null
+            echo "Deleted branch: $branch"
+          done
+
+          echo "Removing obsolete tags."
+          mapfile -t tag_refs < <(gh api --paginate "repos/$repo/git/matching-refs/tags" --jq '.[].ref')
+          for tag_ref in "${tag_refs[@]}"; do
+            encoded_ref="$(printf '%s' "$tag_ref" | jq -sRr @uri)"
+            gh api --method DELETE "repos/$repo/git/refs/$encoded_ref" >/dev/null
+            echo "Deleted tag: $tag_ref"
+          done
+
+          echo "Removing old Actions runs and their artifacts; preserving run $GITHUB_RUN_ID."
+          mapfile -t runs < <(gh api --paginate "repos/$repo/actions/runs?per_page=100" --jq '.workflow_runs[] | "\(.id) \(.status)"')
+          for item in "${runs[@]}"; do
+            run_id="${item%% *}"
+            status="${item#* }"
+            if [[ "$run_id" == "$GITHUB_RUN_ID" ]]; then
+              continue
+            fi
+            if [[ "$status" != "completed" ]]; then
+              gh api --method POST "repos/$repo/actions/runs/$run_id/cancel" >/dev/null || true
+              for attempt in {1..20}; do
+                status="$(gh api "repos/$repo/actions/runs/$run_id" --jq '.status')"
+                [[ "$status" == "completed" ]] && break
+                sleep 2
+              done
+            fi
+            if [[ "$status" != "completed" ]]; then
+              echo "Could not safely delete run $run_id (status=$status)." >&2
+              exit 1
+            fi
+            gh api --method DELETE "repos/$repo/actions/runs/$run_id" >/dev/null
+            echo "Deleted workflow run: $run_id"
+          done
+
+          echo "One-time Alpha 0.1 cleanup finished."
