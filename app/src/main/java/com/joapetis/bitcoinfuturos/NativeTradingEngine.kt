@@ -580,25 +580,18 @@ object NativeTradingEngine {
             requiredBars.forEach { bar ->
                 val key = "BTC-USDT|$bar"
                 val candles = chartCandleCache[key]
-                val stale = candles == null || candles.isEmpty() ||
-                    (candles.last().time > 0L && now - candles.last().time > barDurationMs(bar))
+                val lastClosed = candles?.lastOrNull()?.time ?: 0L
+                val stale = candles == null || candles.isEmpty() || lastClosed <= 0L || now - lastClosed >= 2L * barDurationMs(bar)
                 if (stale && chartRequests.add(key)) {
                     chartExecutor.execute {
                         try {
                             val parsed = fetchCandles("BTC-USDT", bar)?.mapNotNull { row ->
-                                if (row.length() < 6) null else CandleSnapshot(
-                                    row.optLong(0), row.optDouble(1), row.optDouble(2),
-                                    row.optDouble(3), row.optDouble(4), row.optDouble(5)
-                                )
-                            }
-                            if (!parsed.isNullOrEmpty()) synchronized(lock) {
-                                chartCandleCache[key] = parsed.takeLast(220)
-                            }
+                                if (row.length() < 6) null else CandleSnapshot(row.optLong(0), row.optDouble(1), row.optDouble(2), row.optDouble(3), row.optDouble(4), row.optDouble(5))
+                            }?.let { closedCandles(it, bar, System.currentTimeMillis()) }
+                            if (!parsed.isNullOrEmpty()) synchronized(lock) { chartCandleCache[key] = parsed.takeLast(220) }
                         } catch (_: Exception) {
-                            synchronized(lock) { lastError = "No se pudieron cargar velas BTC $bar" }
-                        } finally {
-                            chartRequests.remove(key)
-                        }
+                            synchronized(lock) { lastError = "No se pudieron cargar velas cerradas BTC $bar" }
+                        } finally { chartRequests.remove(key) }
                     }
                 }
             }
