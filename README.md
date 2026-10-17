@@ -50,9 +50,11 @@ La aplicación necesita acceso a Internet para obtener datos de mercado y titula
 ¡Se agradecen las revisiones, los informes de errores y las mejoras! Algunas áreas útiles:
 
 - Pruebas unitarias de indicadores, señales, tamaño de posición y cálculo de PnL.
-- Verificación de comisiones, deslizamiento y financiación simulada.
-- Robustez ante desconexiones, datos antiguos y respuestas inesperadas de los proveedores.
-- Evaluación histórica sin *look-ahead bias* y comparación con una referencia sencilla.
+- Comparación reproducible entre la estrategia base y las capas MTF, Order Flow e IA, activándolas por separado.
+- Verificación de comisiones, deslizamiento y financiación con operaciones cerradas y tarifas oficiales del exchange.
+- Validación de timestamps de velas, libro, decisión y precio ejecutable.
+- Robustez ante desconexiones y datos antiguos.
+- Evaluación histórica sin *look-ahead bias*, con velas cerradas y una referencia sencilla.
 - Explicabilidad de las decisiones, métricas y mejoras de la interfaz.
 - Documentación, accesibilidad y compatibilidad entre dispositivos.
 
@@ -121,9 +123,11 @@ Internet access is required to retrieve market data and headlines. Gemini Nano f
 Code reviews, bug reports, and improvements are welcome. Useful areas include:
 
 - Unit tests for indicators, signals, position sizing, and PnL accounting.
-- Verification of simulated fees, slippage, and funding costs.
-- Resilience to disconnections, stale data, and unexpected provider responses.
-- Historical evaluation without look-ahead bias and comparison with a simple baseline.
+- Reproducible comparison between the baseline and MTF, Order Flow, and AI layers, toggled independently.
+- Verification of fees, slippage, and funding using closed trades and official exchange rates.
+- Timestamp validation for candles, order book, decisions, and executable prices.
+- Resilience to disconnections and stale data.
+- Historical evaluation without look-ahead bias, using closed candles and a simple baseline.
 - Decision explainability, metrics, and UI improvements.
 - Documentation, accessibility, and device compatibility.
 
