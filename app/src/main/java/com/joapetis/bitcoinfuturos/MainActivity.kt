@@ -47,7 +47,7 @@ class MainActivity : Activity() {
     private var aiStatusView: TextView? = null; private var aiBrainView: TextView? = null; private var aiLessonsView: TextView? = null
     private var historySortBest = false
     private var page = "Inicio"; private var selected = "BTC-USDT"; private var chartBar = "1m"
-    private val backupPicker = 4102; private val speechRequest = 4103
+    private val backupPicker = 4102; private val speechRequest = 4103; private val backupFilePicker = 4104
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
     private fun money(v: Double) = String.format(Locale.US, "%,.2f USDT", v)
 
@@ -376,10 +376,13 @@ class MainActivity : Activity() {
         val modes = listOf("conservador", "normal", "agresivo")
         bot.addView(chipRow(modes.map { it.replaceFirstChar { c -> c.uppercase() } }, modes.indexOf(NativeTradingEngine.aiMode())) { NativeTradingEngine.aiSetMode(modes[it]); updateScreen() })
         addCard(bot)
-        actionButton("Seleccionar Documentos para respaldos") { openBackupFolderPicker() }
-        actionButton("Restaurar último respaldo") {
-            Toast.makeText(this, NativeTradingEngine.restoreUserBackup(), Toast.LENGTH_LONG).show()
-            updateScreen()
+        actionButton("Seleccionar carpeta de respaldo (conservar aprendizaje)") { openBackupFolderPicker() }
+        actionButton("Restaurar último respaldo de la carpeta") {
+            Toast.makeText(this, NativeTradingEngine.restoreUserBackup(), Toast.LENGTH_LONG).show(); updateScreen()
+        }
+        actionButton("Importar copia JSON (tras reinstalar)") {
+            val intent=Intent(Intent.ACTION_OPEN_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="application/json";addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)}
+            startActivityForResult(intent,backupFilePicker)
         }
     }
 
@@ -669,8 +672,11 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == backupPicker && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
-            Toast.makeText(this, NativeTradingEngine.setBackupFolder(uri), Toast.LENGTH_LONG).show()
-            updateScreen()
+            Toast.makeText(this, NativeTradingEngine.setBackupFolder(uri), Toast.LENGTH_LONG).show(); updateScreen()
+        }
+        if(requestCode==backupFilePicker&&resultCode==RESULT_OK){
+            val uri=data?.data?:return
+            Toast.makeText(this,NativeTradingEngine.importUserBackup(uri),Toast.LENGTH_LONG).show();updateScreen()
         }
         if (requestCode == speechRequest && resultCode == RESULT_OK) {
             val spoken = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
