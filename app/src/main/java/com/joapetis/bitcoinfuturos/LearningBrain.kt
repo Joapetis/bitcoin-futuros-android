@@ -96,12 +96,12 @@ class LearningBrain {
         val maxHoldMs: Long
     )
 
-    var imbEntry = 0.16
-    var persistEvals = 3
-    var targetRate = 0.0046           // 46 bps objetivo base
-    var stopRate = 0.0018             // 18 bps stop base (Ratio > 2.5:1 bruto, breakeven ~50%)
-    var minEdge = -0.01
-    var warmupSamples = 15
+    var imbEntry = 0.12               // Detecta desequilibrios antes de que se agote el movimiento
+    var persistEvals = 2               // Confirmación de dos evaluaciones
+    var targetRate = 0.0022            // 22 bps de Take Profit
+    var stopRate = 0.0014              // 14 bps de Stop Loss
+    var minEdge = -0.03
+    var warmupSamples = 5
     var dailyLossLimit = 0.15
     var mode = "normal"
     val blockedHoursLocal = linkedSetOf<Int>()
@@ -183,8 +183,8 @@ class LearningBrain {
             if (blendedP < need - 0.05) {
                 reasons.add("confianza combinada " + pct(blendedP) + "% < " + pct(need) + "%")
             }
-            val safeStop = freshNano.stopRate.coerceIn(0.0018, 0.0032)
-            val safeTarget = max(freshNano.targetRate, max(0.0044, safeStop * 2.3))
+            val safeStop = freshNano.stopRate.coerceIn(0.0014, 0.0032)
+            val safeTarget = max(freshNano.targetRate, max(0.0022, safeStop * 1.35))
             return AiDecision(
                 allow = reasons.isEmpty(),
                 pWin = blendedP,
@@ -273,10 +273,10 @@ class LearningBrain {
         val best = variantStats.entries.filter { it.value.wins + it.value.losses >= 6.0 }
             .maxByOrNull { it.value.edge / (it.value.wins + it.value.losses) } ?: return
         when (best.key) {
-            "Francotirador" -> { stopRate = 0.0016; targetRate = 0.0040; bestVariantLabel = "Francotirador (SL 16 / TP 40 bps)" }
-            "Tendencial" -> { stopRate = 0.0022; targetRate = 0.0058; bestVariantLabel = "Tendencial (SL 22 / TP 58 bps)" }
-            "Equilibrada" -> { stopRate = 0.0018; targetRate = 0.0046; bestVariantLabel = "Equilibrada (SL 18 / TP 46 bps)" }
-            "Impulso60s" -> { stopRate = 0.0017; targetRate = 0.0042; bestVariantLabel = "Impulso Rápido (SL 17 / TP 42 bps)" }
+            "Francotirador" -> { stopRate = 0.0014; targetRate = 0.0022; bestVariantLabel = "Francotirador (SL 14 / TP 22 bps)" }
+            "Tendencial" -> { stopRate = 0.0018; targetRate = 0.0030; bestVariantLabel = "Tendencial (SL 18 / TP 30 bps)" }
+            "Equilibrada" -> { stopRate = 0.0014; targetRate = 0.0022; bestVariantLabel = "Equilibrada (SL 14 / TP 22 bps)" }
+            "Impulso60s" -> { stopRate = 0.0014; targetRate = 0.0022; bestVariantLabel = "Impulso Rápido (SL 14 / TP 22 bps)" }
         }
         clamp(costRate)
     }
@@ -362,8 +362,8 @@ class LearningBrain {
     fun clamp(costRate: Double = 0.0014) {
         imbEntry = imbEntry.coerceIn(0.12, 0.38)
         persistEvals = persistEvals.coerceIn(2, 5)
-        stopRate = stopRate.coerceIn(0.0015, 0.0032)
-        targetRate = targetRate.coerceIn(max(0.0040, costRate * 2.8), 0.0095)
+        stopRate = stopRate.coerceIn(0.0014, 0.0032)
+        targetRate = targetRate.coerceIn(max(0.0022, costRate * 2.8), 0.0095)
         minEdge = minEdge.coerceIn(-0.05, 0.06)
         warmupSamples = warmupSamples.coerceIn(5, 20)
         dailyLossLimit = dailyLossLimit.coerceIn(0.03, 0.25)
@@ -371,9 +371,9 @@ class LearningBrain {
 
     fun applyMode(name: String): Boolean {
         when (name) {
-            "conservador" -> { imbEntry = 0.22; persistEvals = 4; stopRate = 0.0018; targetRate = 0.0048; minEdge = 0.01; warmupSamples = 18; dailyLossLimit = 0.08 }
-            "normal" -> { imbEntry = 0.16; persistEvals = 3; stopRate = 0.0018; targetRate = 0.0046; minEdge = -0.01; warmupSamples = 15; dailyLossLimit = 0.15 }
-            "agresivo" -> { imbEntry = 0.13; persistEvals = 2; stopRate = 0.0016; targetRate = 0.0042; minEdge = -0.03; warmupSamples = 8; dailyLossLimit = 0.25 }
+            "conservador" -> { imbEntry = 0.22; persistEvals = 4; stopRate = 0.0018; targetRate = 0.0030; minEdge = 0.01; warmupSamples = 18; dailyLossLimit = 0.08 }
+            "normal" -> { imbEntry = 0.16; persistEvals = 3; stopRate = 0.0016; targetRate = 0.0026; minEdge = -0.01; warmupSamples = 15; dailyLossLimit = 0.15 }
+            "agresivo" -> { imbEntry = 0.12; persistEvals = 2; stopRate = 0.0014; targetRate = 0.0022; minEdge = -0.03; warmupSamples = 5; dailyLossLimit = 0.25 }
             else -> return false
         }
         mode = name
@@ -490,12 +490,12 @@ class LearningBrain {
                 }
             }
             copyInto(recent, o.optJSONArray("recent")); copyInto(lessons, o.optJSONArray("lessons")); copyInto(chat, o.optJSONArray("chat"))
-            imbEntry = o.optDouble("imbEntry", imbEntry).coerceAtMost(0.24)
-            persistEvals = o.optInt("persist", persistEvals).coerceAtMost(4)
-            targetRate = o.optDouble("target", targetRate).coerceIn(0.0040, 0.0095)
-            stopRate = o.optDouble("stop", 0.0018).coerceIn(0.0015, 0.0025)
-            minEdge = o.optDouble("minEdge", minEdge).coerceAtMost(0.01)
-            warmupSamples = o.optInt("warmup", 15).coerceIn(5, 18)
+            imbEntry = o.optDouble("imbEntry", imbEntry).coerceIn(0.12, 0.38)
+            persistEvals = o.optInt("persist", persistEvals).coerceIn(2, 5)
+            targetRate = o.optDouble("target", targetRate).coerceIn(0.0022, 0.0095)
+            stopRate = o.optDouble("stop", 0.0014).coerceIn(0.0014, 0.0032)
+            minEdge = o.optDouble("minEdge", minEdge).coerceIn(-0.05, 0.06)
+            warmupSamples = o.optInt("warmup", 5).coerceIn(5, 20)
             dailyLossLimit = o.optDouble("daily", dailyLossLimit); mode = o.optString("mode", mode)
             blockedHoursLocal.clear()
             val hs = o.optJSONArray("hours"); if (hs != null) for (i in 0 until hs.length()) blockedHoursLocal.add(hs.optInt(i))
