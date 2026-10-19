@@ -153,7 +153,6 @@ class LearningBrain {
     fun decide(f: TradeFeatures, costRate: Double, nanoDecision: NanoTradeDecision? = null): AiDecision {
         val statP = predict(f)
         val reasons = mutableListOf<String>()
-        val s = if (f.side == "LONG") 1.0 else -1.0
 
         // CVD y MTF son evidencia contextual, no vetos obligatorios de cada entrada.
         // Se conserva únicamente un filtro de volatilidad para evitar setups incapaces de cubrir costes.
