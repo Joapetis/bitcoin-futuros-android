@@ -639,12 +639,9 @@ object NativeTradingEngine {
         val c15 = chartCandleCache["BTC-USDT|15m"]
         val c1h = chartCandleCache["BTC-USDT|1H"]
         val c4h = chartCandleCache["BTC-USDT|4H"]
-        val signal = when {
-            c1m != null && c1m.size >= 60 -> BitcoinSwingStrategy.evaluateFast(c1m, c15, c1h, "1m")
-            c5m != null && c5m.size >= 60 -> BitcoinSwingStrategy.evaluateFast(c5m, c15, c1h, "5m")
-            c15 != null && c15.size >= 60 && c1h != null && c4h != null -> BitcoinSwingStrategy.evaluate(c15, c1h, c4h)
-            else -> null
-        }
+        val signal = (if (c1m != null && c1m.size >= 60) BitcoinSwingStrategy.evaluateFast(c1m, c15, c1h, "1m") else null)
+            ?: (if (c5m != null && c5m.size >= 60) BitcoinSwingStrategy.evaluateFast(c5m, c15, c1h, "5m") else null)
+            ?: (if (c15 != null && c15.size >= 60 && c1h != null && c4h != null) BitcoinSwingStrategy.evaluate(c15, c1h, c4h) else null)
         if (signal == null) {
             b.put("lastSignal", "Sin señal BTC · evaluando tendencia, ruptura y rango en marcos rápidos")
             return
