@@ -229,6 +229,7 @@ object NativeTradingEngine {
                                     if (price > 0) {
                                         pionexQuotes["BTC-USDT"] = price; pionexQuoteAt["BTC-USDT"] = now
                                         bots["BTC-USDT"]?.put("price", price)?.put("priceSource", "PIONEX_TRADE")
+                                        updateSnapshotsCacheLocked()
                                         if (pionexBookBids.isEmpty() || pionexBookAsks.isEmpty() || now - pionexBookUpdatedAt > 3500L) synthesizeBookFromTradeLocked(price, now)
                                     }
                                 }
@@ -964,16 +965,48 @@ object NativeTradingEngine {
     }
 
     private fun saveLocked() {
-        if (!::app.isInitialized) return
-        try {
-            val savedAt = System.currentTimeMillis()
-            bots["BTC-USDT"]?.put("aiBrain", brain.toJson())?.put("learned", brain.samples)
-            val arr = JSONArray(); bots.values.forEach { arr.put(it) }
-            val root = JSONObject().put("schemaVersion", 4).put("savedAt", savedAt).put("appVersion", "0.21-swing-ai-backup").put("bots", arr)
-            val backup = File(app.filesDir, "CryptoFutures"); backup.mkdirs()
-            File(backup, "state-v1.json.tmp").writeText(root.toString())
-            File(backup, "state-v1.json.tmp").renameTo(File(backup, "state-v1.json"))
-            saveUserBackup(root)
-        } catch (e: Exception) { lastError = "No se pudo guardar: ${e.message}".take(120) }
+        if (!::app.isInitialized || saveQueued) return
+        saveQueued = true
+        // Debounce bursts of ticks/UI changes. Snapshot and all I/O run off the trading/WebSocket threads.
+        persistenceExecutor.schedule({
+            val root = synchronized(lock) {
+                saveQueued = false
+                try {
+                    val savedAt = System.currentTimeMillis()
+                    val arr = JSONArray()
+                    bots.values.forEach { b -> arr.put(JSONObject(b.toString())) }
+                    val brainJson = brain.toJson()
+                    val btc = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+                        .firstOrNull { it.optString("symbol") == "BTC-USDT" }
+                    btc?.put("aiBrain", brainJson)?.put("learned", brain.samples)
+                    JSONObject().put("schemaVersion", 4).put("savedAt", savedAt)
+                        .put("appVersion", "0.21-swing-ai-backup").put("bots", arr)
+                } catch (e: Exception) {
+                    lastError = "No se pudo preparar el guardado: ${e.message}".take(120)
+                    null
+                }
+            } ?: return@schedule
+            try {
+                val backup = File(app.filesDir, "CryptoFutures")
+                backup.mkdirs()
+                val target = File(backup, "state-v1.json")
+                val temp = File(backup, "state-v1.json.tmp")
+                temp.writeText(root.toString())
+                if (!temp.renameTo(target)) {
+                    target.writeText(temp.readText())
+                    temp.delete()
+                }
+                val now = System.currentTimeMillis()
+                val shouldWriteExternal = synchronized(lock) {
+                    if (backupTreeUri != null && now - lastExternalBackupAt >= 30_000L) {
+                        lastExternalBackupAt = now
+                        true
+                    } else false
+                }
+                if (shouldWriteExternal) saveUserBackup(root)
+            } catch (e: Exception) {
+                synchronized(lock) { lastError = "No se pudo guardar: ${e.message}".take(120) }
+            }
+        }, 350L, TimeUnit.MILLISECONDS)
     }
 }
