@@ -36,6 +36,11 @@ object NativeTradingEngine {
     private const val TAKER_FEE_RATE = 0.0005       // 0.05% en stops/emergencias
     private const val MAKER_FEE_RATE = 0.0002       // 0.02% en entradas y objetivos limit
     private const val SLIPPAGE_RATE = 0.0001        // 0.01% en ejecuciones a mercado
+    private const val SCALP_MAX_HOLD_MS = 90_000L
+    private const val SCALP_COOLDOWN_MS = 4_000L
+    private const val SCALP_MAX_SPREAD_BPS = 4.5
+    private const val SCALP_MICRO_EDGE_BPS = 0.02
+    private const val SCALP_BOOK_MAX_AGE_MS = 8_000L
     private val symbols = listOf("BTC-USDT")
     private val lock = Any()
     private val bots = linkedMapOf<String, JSONObject>()
@@ -664,7 +669,7 @@ object NativeTradingEngine {
 
     private fun trendEntryLocked(b: JSONObject, now: Long) {
         if (!b.optBoolean("enabled", true) || b.optString("side", "FLAT") != "FLAT") return
-        if (now - b.optLong("swingLastSignalAt", 0L) < 5_000L) return
+        if (now - b.optLong("swingLastSignalAt", 0L) < SCALP_COOLDOWN_MS) return
         val c1m = chartCandleCache["BTC-USDT|1m"]
         val c5m = chartCandleCache["BTC-USDT|5m"]
         val c15 = chartCandleCache["BTC-USDT|15m"]
@@ -681,10 +686,18 @@ object NativeTradingEngine {
         if (price <= 0.0 || balance <= 1.0) return
         val side=signal.side;val sign=if(side=="LONG")1.0 else -1.0
         val bookAgeMs=if(pionexBookUpdatedAt>0L)now-pionexBookUpdatedAt else Long.MAX_VALUE
-        val liveBook=if(bookAgeMs in 0L..2500L&&pionexBookSource!="Tape L2")L2Metrics.compute(pionexBookBids,pionexBookAsks)else null
+        val liveBook=if(bookAgeMs in 0L..SCALP_BOOK_MAX_AGE_MS&&pionexBookSource!="Tape L2")L2Metrics.compute(pionexBookBids,pionexBookAsks)else null
         pruneFlowEventsLocked(now)
         val flowAbs = runningBuyVol + runningSellVol
         val flowScore = if (flowAbs > 0.0) ((runningBuyVol - runningSellVol) / flowAbs).coerceIn(-1.0, 1.0) else 0.0
+        if (liveBook != null && liveBook.spreadBps > SCALP_MAX_SPREAD_BPS) {
+            b.put("lastSignal", "Entrada omitida · spread ${String.format(Locale.US, "%.2f", liveBook.spreadBps)} bps supera el máximo")
+            return
+        }
+        if (liveBook != null && liveBook.micropriceEdgeBps * (if (side == "LONG") 1.0 else -1.0) < -SCALP_MICRO_EDGE_BPS) {
+            b.put("lastSignal", "Entrada omitida · microprecio contradice la dirección")
+            return
+        }
         val features=TradeFeatures(side,liveBook?.imbalance?:0.0,liveBook?.micropriceEdgeBps?:0.0,liveBook?.spreadBps?:1.0,
             flowScore,signal.atr/price*10_000.0,java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).get(java.util.Calendar.HOUR_OF_DAY),
             pionexNextFundingRate,0.0,currentMtfScore)
@@ -769,13 +782,15 @@ object NativeTradingEngine {
         val liquidated = liq > 0.0 && (if (side == "LONG") mark <= liq else mark >= liq)
         val stopHit = if (side == "LONG") mark <= activeStop else mark >= activeStop
         val targetHit = if (side == "LONG") mark >= target else mark <= target
+        val timedOut = now - b.optLong("entryTime", now) >= SCALP_MAX_HOLD_MS
         val reason = when {
             liquidated -> "Liquidación"
             stopHit -> if (b.optBoolean("trailingActive", false) && favorableMove > 0.0) "Stop en Ganancia (Swing trailing)" else "Stop Swing"
             targetHit -> "Objetivo Swing"
+            timedOut -> "Tiempo máximo scalp (90 s)"
             else -> return
         }
-        val rawExit = if (liquidated) liq else if (stopHit) activeStop else target
+        val rawExit = if (liquidated) liq else if (stopHit) activeStop else if (targetHit) target else mark
         closeTradeLocked(b, reason, rawExit, now)
     }
 
