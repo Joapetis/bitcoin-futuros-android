@@ -106,6 +106,13 @@ object NativeTradingEngine {
         startTradingLoopLocked()
         NewsIntelligence.init(app)
         PixelAi.prepare()
+        HistoricalBitcoinLearning.start(app, brain) { status ->
+            synchronized(lock) {
+                bots["BTC-USDT"]?.put("historicalLearningStatus", status)
+                bots["BTC-USDT"]?.put("lastSignal", status)
+                saveLocked()
+            }
+        }
     }
 
     fun isRunning(): Boolean = synchronized(lock) { bots["BTC-USDT"]?.optBoolean("enabled", true) == true }
@@ -577,14 +584,14 @@ object NativeTradingEngine {
 
             // El motor solicita por sí mismo las tres temporalidades necesarias.
             // No depende de que el usuario abra la pantalla del gráfico.
-            val requiredBars = listOf("15m", "1H", "4H")
+            val requiredBars = listOf("1m", "5m", "15m", "1H", "4H")
             requiredBars.forEach { bar ->
                 val key = "BTC-USDT|$bar"
                 val candles = chartCandleCache[key]
                 val lastClosed = candles?.lastOrNull()?.time ?: 0L
                 // time es la apertura de vela: refrescar poco despues de su cierre.
                 val stale = candles == null || candles.isEmpty() || lastClosed <= 0L || now >= lastClosed + barDurationMs(bar) + 10_000L
-                val retryMs = when (bar) { "15m" -> 15_000L; "1H" -> 30_000L; else -> 60_000L }
+                val retryMs = when (bar) { "1m" -> 5_000L; "5m" -> 8_000L; "15m" -> 12_000L; "1H" -> 30_000L; else -> 60_000L }
                 val lastAttempt = chartLastAttemptAt[key] ?: 0L
                 if (stale && now - lastAttempt >= retryMs && chartRequests.add(key)) {
                     chartLastAttemptAt[key] = now
@@ -609,29 +616,37 @@ object NativeTradingEngine {
                 tradingStatusLocked(b, now, "Trading pausado · sin nuevas entradas")
                 return
             }
+            val c1m = chartCandleCache["BTC-USDT|1m"]
+            val c5m = chartCandleCache["BTC-USDT|5m"]
             val c15 = chartCandleCache["BTC-USDT|15m"]
-            val c1h = chartCandleCache["BTC-USDT|1H"]
-            val c4h = chartCandleCache["BTC-USDT|4H"]
-            if(c15==null||c15.size<60||c1h==null||c1h.size<25||c4h==null||c4h.size<15){
-                tradingStatusLocked(b,now,"Cargando velas cerradas · 15m ${c15?.size?:0}/60 · 1H ${c1h?.size?:0}/25 · 4H ${c4h?.size?:0}/15");return
+            if ((c1m == null || c1m.size < 60) && (c5m == null || c5m.size < 60) && (c15 == null || c15.size < 60)) {
+                tradingStatusLocked(b, now, "Cargando velas BTC · 1m/5m/15m")
+                return
             }
             trendEntryLocked(b, now)
             if (b.optString("side", "FLAT") == "FLAT") {
                 val last = b.optString("lastSignal", "")
-                if (!last.startsWith("Swing filtrado")) tradingStatusLocked(b, now, "Analizando estrategia Swing BTC · 15m/1H/4H")
+                if (!last.startsWith("Swing filtrado") && !last.startsWith("Señal descartada")) tradingStatusLocked(b, now, "Analizando BTC · 1m/5m/15m + contexto 1H/4H")
             }
         }
     }
 
     private fun trendEntryLocked(b: JSONObject, now: Long) {
         if (!b.optBoolean("enabled", true) || b.optString("side", "FLAT") != "FLAT") return
-        if (now - b.optLong("swingLastSignalAt", 0L) < 60_000L) return
-        val c15 = chartCandleCache["BTC-USDT|15m"] ?: return
-        val c1h = chartCandleCache["BTC-USDT|1H"] ?: return
-        val c4h = chartCandleCache["BTC-USDT|4H"] ?: return
-        val signal = BitcoinSwingStrategy.evaluate(c15, c1h, c4h)
+        if (now - b.optLong("swingLastSignalAt", 0L) < 5_000L) return
+        val c1m = chartCandleCache["BTC-USDT|1m"]
+        val c5m = chartCandleCache["BTC-USDT|5m"]
+        val c15 = chartCandleCache["BTC-USDT|15m"]
+        val c1h = chartCandleCache["BTC-USDT|1H"]
+        val c4h = chartCandleCache["BTC-USDT|4H"]
+        val signal = when {
+            c1m != null && c1m.size >= 60 -> BitcoinSwingStrategy.evaluateFast(c1m, c15, c1h, "1m")
+            c5m != null && c5m.size >= 60 -> BitcoinSwingStrategy.evaluateFast(c5m, c15, c1h, "5m")
+            c15 != null && c15.size >= 60 && c1h != null && c4h != null -> BitcoinSwingStrategy.evaluate(c15, c1h, c4h)
+            else -> null
+        }
         if (signal == null) {
-            b.put("lastSignal", "Sin señal confirmada · estrategia Swing esperando tendencia/ruptura")
+            b.put("lastSignal", "Sin señal BTC · evaluando tendencia, ruptura y rango en marcos rápidos")
             return
         }
         val price = b.optDouble("price", signal.price); val balance = b.optDouble("balance", 100.0)
@@ -655,8 +670,8 @@ object NativeTradingEngine {
             b.put("lastSignal", String.format(Locale.US, "Señal descartada por costes/riesgo · p %.0f%% · EV %.3f%%", probability * 100.0, expectedNet * 100.0))
             return
         }
-        val stopRate = (signal.stopDistance / price).coerceIn(0.004, 0.035)
-        val targetRate = (signal.targetDistance / price).coerceIn(0.008, 0.08)
+        val stopRate = (signal.stopDistance / price).coerceIn(0.0015, 0.035)
+        val targetRate = (signal.targetDistance / price).coerceIn(0.003, 0.08)
         val risk = (b.optDouble("risk", 5.0) / 100.0).coerceIn(0.01, 0.03) * (if (brain.lossStreak >= 3) 0.5 else 1.0)
         val sized = CompoundSizing.size(balance, price, b.optInt("leverage", 100), stopRate, risk, costs) ?: return
         val q1=now-(pionexQuoteAt["BTC-USDT"]?:0L);val q2=now-(bybitQuoteAt["BTC-USDT"]?:0L)
