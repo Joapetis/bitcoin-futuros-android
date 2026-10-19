@@ -43,6 +43,7 @@ object NativeTradingEngine {
     private val chartExecutor = java.util.concurrent.Executors.newFixedThreadPool(3)
     private val ensembleExecutor = java.util.concurrent.Executors.newFixedThreadPool(5)
     private val chartRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val chartLastAttemptAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val quoteClient = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).retryOnConnectionFailure(true).build()
     private var pionexSocket: WebSocket? = null
     private val pionexQuotes = linkedMapOf<String, Double>()
@@ -581,8 +582,12 @@ object NativeTradingEngine {
                 val key = "BTC-USDT|$bar"
                 val candles = chartCandleCache[key]
                 val lastClosed = candles?.lastOrNull()?.time ?: 0L
-                val stale = candles == null || candles.isEmpty() || lastClosed <= 0L || now - lastClosed >= 2L * barDurationMs(bar)
-                if (stale && chartRequests.add(key)) {
+                // time es la apertura de vela: refrescar poco despues de su cierre.
+                val stale = candles == null || candles.isEmpty() || lastClosed <= 0L || now >= lastClosed + barDurationMs(bar) + 10_000L
+                val retryMs = when (bar) { "15m" -> 15_000L; "1H" -> 30_000L; else -> 60_000L }
+                val lastAttempt = chartLastAttemptAt[key] ?: 0L
+                if (stale && now - lastAttempt >= retryMs && chartRequests.add(key)) {
+                    chartLastAttemptAt[key] = now
                     chartExecutor.execute {
                         try {
                             val parsed = fetchCandles("BTC-USDT", bar)?.mapNotNull { row ->

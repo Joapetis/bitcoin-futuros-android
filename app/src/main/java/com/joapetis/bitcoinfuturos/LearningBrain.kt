@@ -497,7 +497,7 @@ class LearningBrain {
             copyInto(recent, o.optJSONArray("recent")); copyInto(lessons, o.optJSONArray("lessons")); copyInto(chat, o.optJSONArray("chat"))
             imbEntry = o.optDouble("imbEntry", imbEntry).coerceAtMost(0.24)
             persistEvals = o.optInt("persist", persistEvals).coerceAtMost(4)
-            targetRate = max(0.0045, o.optDouble("target", targetRate))
+            targetRate = o.optDouble("target", targetRate).coerceIn(0.0040, 0.0095)
             stopRate = o.optDouble("stop", 0.0018).coerceIn(0.0015, 0.0025)
             minEdge = o.optDouble("minEdge", minEdge).coerceAtMost(0.01)
             warmupSamples = o.optInt("warmup", 15).coerceIn(5, 18)
