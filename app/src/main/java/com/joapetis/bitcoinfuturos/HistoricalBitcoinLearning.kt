@@ -59,7 +59,7 @@ internal object HistoricalBitcoinLearning {
                     brain.learnHistoricalSample(f, outcome - COST_RATE > 0.0, outcome - COST_RATE)
                     learned++; evaluated++
                 }
-                if (initial) meta.put("trainedThrough", candles.getOrNull(trainEnd - 1)?.time ?: 0L)
+                if (initial) meta.put("trainedThrough", candles.lastOrNull()?.time ?: 0L)
                 else if (end > start) meta.put("trainedThrough", candles.getOrNull(end - 1)?.time ?: previous)
                 meta.put("lastSamples", evaluated).put("lastLearned", learned).put("lastRun", System.currentTimeMillis())
                 metaFile.writeText(meta.toString())
