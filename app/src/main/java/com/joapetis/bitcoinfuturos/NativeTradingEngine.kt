@@ -965,7 +965,9 @@ object NativeTradingEngine {
     }
 
     private fun saveLocked() {
-        if (!::app.isInitialized || saveQueued) return
+        if (!::app.isInitialized) return
+        updateSnapshotsCacheLocked()
+        if (saveQueued) return
         saveQueued = true
         // Debounce bursts of ticks/UI changes. Snapshot and all I/O run off the trading/WebSocket threads.
         persistenceExecutor.schedule({
