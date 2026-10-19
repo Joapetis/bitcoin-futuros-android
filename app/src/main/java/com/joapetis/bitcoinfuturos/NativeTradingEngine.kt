@@ -68,6 +68,12 @@ object NativeTradingEngine {
     private var backupTreeUri: Uri? = null
     private val levOptions = listOf(1, 2, 3, 5, 10, 20, 50, 75, 100)
     @Volatile private var currentMtfScore = 0.0
+    private val persistenceExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "btc-state-persistence").apply { isDaemon = true } }
+    @Volatile private var snapshotsCache: List<BotSnapshot> = emptyList()
+    private var saveQueued = false
+    private var lastExternalBackupAt = 0L
+    private var runningBuyVol = 0.0
+    private var runningSellVol = 0.0
 
     fun init(context: Context) = synchronized(lock) {
         if (initialized) return
@@ -100,6 +106,7 @@ object NativeTradingEngine {
         }
         bots["BTC-USDT"]?.put("tradingMode", "SWING")
         loadBrainLocked()
+        updateSnapshotsCacheLocked()
         saveLocked()
         initialized = true
         startQuoteStreamsLocked()
@@ -121,19 +128,21 @@ object NativeTradingEngine {
     fun setRisk(symbol: String, risk: Double) = synchronized(lock) { bots[symbol]?.put("risk", risk.coerceIn(1.0, 100.0)); saveLocked() }
     fun setLeverage(symbol: String, leverage: Int) = synchronized(lock) { bots[symbol]?.put("leverage", if (leverage in levOptions) leverage else 100); saveLocked() }
 
-    fun snapshots(): List<BotSnapshot> = synchronized(lock) {
-        symbols.map { s ->
-            val b = bots[s]!!
+    fun snapshots(): List<BotSnapshot> = snapshotsCache
+
+    private fun updateSnapshotsCacheLocked() {
+        snapshotsCache = symbols.mapNotNull { s ->
+            val b = bots[s] ?: return@mapNotNull null
             val p = b.optDouble("price", 0.0)
             val entry = b.optDouble("entry", 0.0)
             val side = b.optString("side", "FLAT")
             val floating = if (entry > 0 && p > 0 && side != "FLAT") (if (side == "LONG") p - entry else entry - p) * b.optDouble("qty", 0.0) else 0.0
             val balance = b.optDouble("balance", 100.0)
             BotSnapshot(s, balance, p, balance - b.optDouble("initial", 100.0) - b.optDouble("injectedCapital", 0.0) + floating,
-                side, entry, b.optInt("trades"), b.optInt("wins"), b.optString("lastSignal"),
-                b.optInt("leverage", 100), b.optDouble("risk", 5.0), brain.samples, balance + floating)
+                side, entry, b.optInt("trades"), b.optInt("wins"), b.optString("lastSignal"), b.optInt("leverage", 100), b.optDouble("risk", 5.0), brain.samples, balance + floating)
         }
     }
+
 
     fun jointOperationState(): JSONObject = synchronized(lock) {
         val b = bots["BTC-USDT"] ?: JSONObject()
@@ -215,8 +224,7 @@ object NativeTradingEngine {
                                 val tradeSide = row.optString("side").uppercase(Locale.US)
                                 synchronized(lock) {
                                     if (size > 0.0 && (tradeSide == "BUY" || tradeSide == "SELL")) {
-                                        flowEvents.addLast(now to (if (tradeSide == "BUY") size else -size))
-                                        while (flowEvents.size > 5000) flowEvents.removeFirst()
+                                        addFlowEventLocked(now, if (tradeSide == "BUY") size else -size)
                                     }
                                     if (price > 0) {
                                         pionexQuotes["BTC-USDT"] = price; pionexQuoteAt["BTC-USDT"] = now
@@ -271,11 +279,31 @@ object NativeTradingEngine {
         })
     }
 
+    private fun addFlowEventLocked(now: Long, signedSize: Double) {
+        if (!signedSize.isFinite() || signedSize == 0.0) return
+        flowEvents.addLast(now to signedSize)
+        if (signedSize > 0.0) runningBuyVol += signedSize else runningSellVol += -signedSize
+        pruneFlowEventsLocked(now)
+        while (flowEvents.size > 5000) {
+            val removed = flowEvents.removeFirst().second
+            if (removed > 0.0) runningBuyVol = max(0.0, runningBuyVol - removed)
+            else runningSellVol = max(0.0, runningSellVol + removed)
+        }
+    }
+
+    private fun pruneFlowEventsLocked(now: Long) {
+        while (flowEvents.isNotEmpty() && now - flowEvents.first().first > 30_000L) {
+            val removed = flowEvents.removeFirst().second
+            if (removed > 0.0) runningBuyVol = max(0.0, runningBuyVol - removed)
+            else runningSellVol = max(0.0, runningSellVol + removed)
+        }
+    }
+
     private fun synthesizeBookFromTradeLocked(price: Double, now: Long) {
         if (price <= 0.0) return
-        while (flowEvents.isNotEmpty() && now - flowEvents.first().first > 20_000L) flowEvents.removeFirst()
-        var buyVol = 1.2; var sellVol = 1.2
-        for (e in flowEvents) { if (e.second > 0) buyVol += e.second else sellVol -= e.second }
+        pruneFlowEventsLocked(now)
+        val buyVol = 1.2 + runningBuyVol
+        val sellVol = 1.2 + runningSellVol
         val halfSpread = max(0.05, price * 0.000025)
         pionexBookBids.clear(); pionexBookAsks.clear()
         for (lvl in 0 until 10) {
@@ -357,8 +385,7 @@ object NativeTradingEngine {
                                     val sz = row.optString("v").toDoubleOrNull() ?: 0.0
                                     val s = row.optString("S").uppercase(Locale.US)
                                     if (sz > 0.0 && (s == "BUY" || s == "SELL")) {
-                                        flowEvents.addLast(now to (if (s == "BUY") sz else -sz))
-                                        while (flowEvents.size > 5000) flowEvents.removeFirst()
+                                        addFlowEventLocked(now, if (s == "BUY") sz else -sz)
                                     }
                                 }
                             }
@@ -651,8 +678,9 @@ object NativeTradingEngine {
         val side=signal.side;val sign=if(side=="LONG")1.0 else -1.0
         val bookAgeMs=if(pionexBookUpdatedAt>0L)now-pionexBookUpdatedAt else Long.MAX_VALUE
         val liveBook=if(bookAgeMs in 0L..2500L&&pionexBookSource!="Tape L2")L2Metrics.compute(pionexBookBids,pionexBookAsks)else null
-        val flowWindow=flowEvents.filter{now-it.first in 0L..30_000L};val flowAbs=flowWindow.sumOf{abs(it.second)}
-        val flowScore=if(flowAbs>0.0)(flowWindow.sumOf{it.second}/flowAbs).coerceIn(-1.0,1.0)else 0.0
+        pruneFlowEventsLocked(now)
+        val flowAbs = runningBuyVol + runningSellVol
+        val flowScore = if (flowAbs > 0.0) ((runningBuyVol - runningSellVol) / flowAbs).coerceIn(-1.0, 1.0) else 0.0
         val features=TradeFeatures(side,liveBook?.imbalance?:0.0,liveBook?.micropriceEdgeBps?:0.0,liveBook?.spreadBps?:1.0,
             flowScore,signal.atr/price*10_000.0,java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).get(java.util.Calendar.HOUR_OF_DAY),
             pionexNextFundingRate,0.0,currentMtfScore)
