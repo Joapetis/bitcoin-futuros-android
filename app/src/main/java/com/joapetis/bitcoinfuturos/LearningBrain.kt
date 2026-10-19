@@ -166,7 +166,7 @@ class LearningBrain {
         // las entradas: el modelo puede aprender con resultados reales desde el inicio.
         val warmup = samples < warmupSamples
         val adjustedP = if (warmup) (statP * 0.85 + 0.075).coerceIn(0.05, 0.98) else statP
-        val need = (breakeven(costRate) + minEdge).coerceIn(0.48, 0.55)
+        val need = (breakeven(costRate) + minEdge).coerceIn(0.42, 0.55)
         if (adjustedP < need - 0.05) {
             reasons.add("modelo estadístico rechaza setup (" + pct(adjustedP) + "% < " + pct(need) + "%)")
         }
@@ -359,7 +359,7 @@ class LearningBrain {
         }
     }
 
-    fun clamp(costRate: Double = 0.0014) {
+    fun clamp(costRate: Double = 0.0004) {
         imbEntry = imbEntry.coerceIn(0.12, 0.38)
         persistEvals = persistEvals.coerceIn(2, 5)
         stopRate = stopRate.coerceIn(0.0014, 0.0032)
@@ -512,7 +512,7 @@ class LearningBrain {
             val hs = o.optJSONArray("hours"); if (hs != null) for (i in 0 until hs.length()) blockedHoursLocal.add(hs.optInt(i))
             shadows.clear()
             clamp()
-            refreshBlocks(0.0014)
+            refreshBlocks(0.0004)
         } catch (_: Exception) { }
     }
 
