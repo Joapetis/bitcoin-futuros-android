@@ -155,42 +155,33 @@ class LearningBrain {
         val reasons = mutableListOf<String>()
         val s = if (f.side == "LONG") 1.0 else -1.0
 
-        // 1) Prohibido entrar con cinta CVD en contra o neutra (evita trampas de liquidez pasiva)
-        if (f.flow * s < 0.06) {
-            reasons.add("cinta CVD sin agresión a favor (${String.format(Locale.US, "%+.2f", f.flow)})")
-        }
-        // 2) Prohibido operar contra el consenso fuerte del enjambre multi-temporalidad
-        if (f.mtfScore * s < -0.25) {
-            reasons.add("enjambre multi-temporal en contra (${String.format(Locale.US, "%+.2f", f.mtfScore)})")
-        }
-        // 3) Volatilidad mínima para cubrir costes
+        // CVD y MTF son evidencia contextual, no vetos obligatorios de cada entrada.
+        // Se conserva únicamente un filtro de volatilidad para evitar setups incapaces de cubrir costes.
         if (f.volBps < 6.5) {
             reasons.add("volatilidad baja (${String.format(Locale.US, "%.1f", f.volBps)} bps)")
         }
         for (b in f.buckets()) {
             if (isBlocking(b, costRate)) reasons.add("regla aprendida: " + describe(b))
         }
-        if (samples < warmupSamples) {
-            return AiDecision(false, statP, listOf("aprendiendo del flujo L2 ($samples/$warmupSamples muestras)"), true)
-        }
-
+        // El warm-up reduce la confianza implícita, pero nunca bloquea indefinidamente
+        // las entradas: el modelo puede aprender con resultados reales desde el inicio.
+        val warmup = samples < warmupSamples
+        val adjustedP = if (warmup) (statP * 0.85 + 0.075).coerceIn(0.05, 0.98) else statP
         val need = (breakeven(costRate) + minEdge).coerceIn(0.48, 0.55)
-        if (statP < need - 0.03) {
-            reasons.add("modelo estadístico rechaza setup (" + pct(statP) + "% < " + pct(need) + "%)")
+        if (adjustedP < need - 0.05) {
+            reasons.add("modelo estadístico rechaza setup (" + pct(adjustedP) + "% < " + pct(need) + "%)")
         }
 
         val freshNano = nanoDecision?.takeIf { System.currentTimeMillis() - it.timestamp <= 10_000L }
         if (freshNano != null) {
-            val blendedP = (freshNano.confidence * 0.50 + statP * 0.50).coerceIn(0.05, 0.98)
-            if (freshNano.action == "HOLD") {
-                reasons.add("Gemini Nano: esperar (${freshNano.reason})")
-                return AiDecision(false, blendedP, reasons, false, nanoSource = true)
+            val blendedP = (freshNano.confidence * 0.35 + adjustedP * 0.65).coerceIn(0.05, 0.98)
+            // Nano solo puede vetar con una opinión muy segura y si el modelo estadístico
+            // también estima que la operación no cubre el punto de equilibrio.
+            if ((freshNano.action == "HOLD" || freshNano.action != f.side) &&
+                freshNano.confidence >= 0.85 && adjustedP < breakeven(costRate)) {
+                return AiDecision(false, blendedP, listOf("Filtro de seguridad Nano + estadística: ${freshNano.reason}"), warmup, nanoSource = true)
             }
-            if (freshNano.action != f.side) {
-                reasons.add("Gemini Nano detecta giro a ${freshNano.action}")
-                return AiDecision(false, blendedP, reasons, false, nanoSource = true)
-            }
-            if (blendedP < need) {
+            if (blendedP < need - 0.05) {
                 reasons.add("confianza combinada " + pct(blendedP) + "% < " + pct(need) + "%")
             }
             val safeStop = freshNano.stopRate.coerceIn(0.0018, 0.0032)
@@ -199,15 +190,15 @@ class LearningBrain {
                 allow = reasons.isEmpty(),
                 pWin = blendedP,
                 reasons = if (reasons.isEmpty()) listOf("Gemini Nano (${pct(blendedP)}%): ${freshNano.reason}") else reasons,
-                warmup = false,
+                warmup = warmup,
                 customStopRate = safeStop,
                 customTargetRate = safeTarget,
                 nanoSource = true
             )
         }
 
-        if (statP < need) reasons.add("probabilidad estimada " + pct(statP) + "% < " + pct(need) + "%")
-        return AiDecision(reasons.isEmpty(), statP, reasons, false)
+        if (adjustedP < need - 0.02) reasons.add("probabilidad estimada " + pct(adjustedP) + "% < " + pct(need) + "%")
+        return AiDecision(reasons.isEmpty(), adjustedP, reasons, warmup)
     }
 
     private fun isBlocking(key: String, costRate: Double): Boolean {
