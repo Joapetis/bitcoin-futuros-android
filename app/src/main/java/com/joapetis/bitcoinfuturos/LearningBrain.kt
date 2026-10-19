@@ -314,6 +314,11 @@ class LearningBrain {
         return text
     }
 
+    @Synchronized
+    fun learnHistoricalSample(features: TradeFeatures, won: Boolean, netRate: Double) {
+        record(features, won, netRate, false, "Histórico BTC", 0L, 0.0014)
+    }
+
     private fun record(f: TradeFeatures, won: Boolean, rate: Double, real: Boolean, reason: String, durationMs: Long, costRate: Double) {
         val weight = if (real) 4.0 else 0.4
         val v = f.vector()
