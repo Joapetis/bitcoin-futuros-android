@@ -29,6 +29,40 @@ internal object BitcoinSwingStrategy {
         val chosen=side?:return null
         return SwingSignal(chosen,regime,close,atr,max(atr*2.2,close*0.004),max(atr*3.2,close*0.008),c15.last().time)
     }
+    fun evaluateFast(base: List<CandleSnapshot>, context15: List<CandleSnapshot>?, context1h: List<CandleSnapshot>?, bar: String): SwingSignal? {
+        if (base.size < 60) return null
+        val closes = base.map { it.close }
+        val close = closes.lastOrNull()?.takeIf { it > 0.0 } ?: return null
+        val e9 = ema(closes, 9); val e21 = ema(closes, 21)
+        val atrValue = atr(base, 14)
+        if (atrValue <= 0.0) return null
+        val rsiValue = rsi(closes, 14)
+        val prior = base[base.size - 2]
+        val recent = base.takeLast(20)
+        val mean = closes.takeLast(20).average()
+        val sd = kotlin.math.sqrt(closes.takeLast(20).map { (it - mean) * (it - mean) }.average())
+        val rangeBps = (recent.maxOf { it.high } - recent.minOf { it.low }) / close * 10000.0
+        val contexts = listOfNotNull(
+            context15?.takeIf { it.size >= 30 }?.let { if (it.last().close > ema(it.map { c -> c.close }, 21)) 1.0 else -1.0 },
+            context1h?.takeIf { it.size >= 20 }?.let { if (it.last().close > ema(it.map { c -> c.close }, 20)) 1.0 else -1.0 }
+        )
+        val contextScore = if (contexts.isEmpty()) 0.0 else contexts.average()
+        val local = (e9 - e21) / close
+        var side: String? = null
+        var regime = "TENDENCIA_RAPIDA"
+        if (local > 0.00025 && close > e9 && close >= prior.high && contextScore >= -0.5) side = "LONG"
+        if (local < -0.00025 && close < e9 && close <= prior.low && contextScore <= 0.5) side = "SHORT"
+        if (side == null && rangeBps < 450.0 && sd > 0.0) {
+            if (close < mean - 1.8 * sd && rsiValue < 32.0) side = "LONG"
+            if (close > mean + 1.8 * sd && rsiValue > 68.0) side = "SHORT"
+            if (side != null) regime = "RANGO_RAPIDO"
+        }
+        val chosen = side ?: return null
+        val stop = max(atrValue * 1.8, close * if (bar == "1m") 0.0018 else 0.0025)
+        val target = max(atrValue * 2.7, close * if (bar == "1m") 0.0035 else 0.0045)
+        return SwingSignal(chosen, regime + "_" + bar, close, atrValue, stop, target, base.last().time)
+    }
+
     private fun ema(v:List<Double>,n:Int):Double{if(v.isEmpty())return 0.0;val k=2.0/(n.coerceIn(1,v.size)+1.0);var e=v.first();for(x in v.drop(1))e=x*k+e*(1-k);return e}
     private fun rsi(v:List<Double>,n:Int):Double{if(v.size<=n)return 50.0;var up=0.0;var down=0.0;for(i in v.size-n until v.size){val d=v[i]-v[i-1];if(d>0)up+=d else down-=d};if(down<=1e-12)return 100.0;return 100.0-100.0/(1.0+up/down)}
     private fun atr(c:List<CandleSnapshot>,n:Int):Double{if(c.size<=n)return 0.0;return(c.size-n until c.size).map{i->val x=c[i];val p=c[i-1].close;max(x.high-x.low,max(abs(x.high-p),abs(x.low-p)))}.average()}
