@@ -690,8 +690,10 @@ object NativeTradingEngine {
             pionexNextFundingRate,0.0,currentMtfScore)
         val probability=brain.predict(features).coerceIn(0.0,1.0)
         val costs = costRate()
-        val expected = signal.targetDistance / price
-        val stopRateCandidate = signal.stopDistance / price
+        // La configuración rápida del LearningBrain gobierna TP/SL; no se conserva
+        // el objetivo ATR más amplio de Swing que haría inoperantes estos parámetros.
+        val expected = brain.targetRate
+        val stopRateCandidate = brain.stopRate
         // El filtro evita señales con objetivo inferior al coste total, pero no exige que
         // un modelo sin suficientes cierres tenga ya una ventaja estadística demostrada.
         val expectedNet = probability * (expected - costs) - (1.0 - probability) * (stopRateCandidate + costs)
@@ -699,8 +701,8 @@ object NativeTradingEngine {
             b.put("lastSignal", String.format(Locale.US, "Señal descartada por costes/riesgo · p %.0f%% · EV %.3f%%", probability * 100.0, expectedNet * 100.0))
             return
         }
-        val stopRate = (signal.stopDistance / price).coerceIn(0.0015, 0.035)
-        val targetRate = (signal.targetDistance / price).coerceIn(0.003, 0.08)
+        val stopRate = brain.stopRate.coerceIn(0.0014, 0.0032)
+        val targetRate = brain.targetRate.coerceIn(0.0022, 0.0095)
         val risk = (b.optDouble("risk", 5.0) / 100.0).coerceIn(0.01, 0.03) * (if (brain.lossStreak >= 3) 0.5 else 1.0)
         val sized = CompoundSizing.size(balance, price, b.optInt("leverage", 100), stopRate, risk, costs) ?: return
         val q1=now-(pionexQuoteAt["BTC-USDT"]?:0L);val q2=now-(bybitQuoteAt["BTC-USDT"]?:0L)
