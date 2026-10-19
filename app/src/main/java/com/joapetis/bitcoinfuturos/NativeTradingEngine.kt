@@ -467,7 +467,7 @@ object NativeTradingEngine {
         if (side == "FLAT" || entry <= 0.0 || mark <= 0.0 || qty <= 0.0) return@synchronized 0.0
         val exit = mark * (if (side == "LONG") 1.0 - SLIPPAGE_RATE else 1.0 + SLIPPAGE_RATE)
         val gross = (if (side == "LONG") exit - entry else entry - exit) * qty
-        val fees = (entry * qty + exit * qty) * TAKER_FEE_RATE
+        val fees = entry * qty * MAKER_FEE_RATE + exit * qty * TAKER_FEE_RATE
         gross - fees - fundingCostLocked(entry * qty, side, b.optLong("entryTime", now), now)
     }
 
@@ -480,7 +480,7 @@ object NativeTradingEngine {
         if (side == "FLAT" || entry <= 0.0 || mark <= 0.0 || qty <= 0.0) { saveLocked(); return@synchronized 0.0 }
         val exit = mark * (if (side == "LONG") 1.0 - SLIPPAGE_RATE else 1.0 + SLIPPAGE_RATE)
         val gross = (if (side == "LONG") exit - entry else entry - exit) * qty
-        val fees = (entry * qty + exit * qty) * TAKER_FEE_RATE
+        val fees = entry * qty * MAKER_FEE_RATE + exit * qty * TAKER_FEE_RATE
         val heldMs = max(0L, now - b.optLong("entryTime", now))
         val funding = fundingCostLocked(entry * qty, side, b.optLong("entryTime", now), now)
         val net = gross - fees - funding
