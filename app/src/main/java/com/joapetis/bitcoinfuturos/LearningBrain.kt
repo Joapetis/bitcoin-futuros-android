@@ -96,12 +96,12 @@ class LearningBrain {
         val maxHoldMs: Long
     )
 
-    var imbEntry = 0.16
-    var persistEvals = 3
-    var targetRate = 0.0046           // 46 bps objetivo base
-    var stopRate = 0.0018             // 18 bps stop base (Ratio > 2.5:1 bruto, breakeven ~50%)
-    var minEdge = -0.01
-    var warmupSamples = 15
+    var imbEntry = 0.12               // Detecta desequilibrios antes de que se agote el movimiento
+    var persistEvals = 2               // Confirmación de dos evaluaciones
+    var targetRate = 0.0022            // 22 bps de Take Profit
+    var stopRate = 0.0014              // 14 bps de Stop Loss
+    var minEdge = -0.03
+    var warmupSamples = 5
     var dailyLossLimit = 0.15
     var mode = "normal"
     val blockedHoursLocal = linkedSetOf<Int>()
@@ -153,61 +153,51 @@ class LearningBrain {
     fun decide(f: TradeFeatures, costRate: Double, nanoDecision: NanoTradeDecision? = null): AiDecision {
         val statP = predict(f)
         val reasons = mutableListOf<String>()
-        val s = if (f.side == "LONG") 1.0 else -1.0
 
-        // 1) Prohibido entrar con cinta CVD en contra o neutra (evita trampas de liquidez pasiva)
-        if (f.flow * s < 0.06) {
-            reasons.add("cinta CVD sin agresión a favor (${String.format(Locale.US, "%+.2f", f.flow)})")
-        }
-        // 2) Prohibido operar contra el consenso fuerte del enjambre multi-temporalidad
-        if (f.mtfScore * s < -0.25) {
-            reasons.add("enjambre multi-temporal en contra (${String.format(Locale.US, "%+.2f", f.mtfScore)})")
-        }
-        // 3) Volatilidad mínima para cubrir costes
+        // CVD y MTF son evidencia contextual, no vetos obligatorios de cada entrada.
+        // Se conserva únicamente un filtro de volatilidad para evitar setups incapaces de cubrir costes.
         if (f.volBps < 6.5) {
             reasons.add("volatilidad baja (${String.format(Locale.US, "%.1f", f.volBps)} bps)")
         }
         for (b in f.buckets()) {
             if (isBlocking(b, costRate)) reasons.add("regla aprendida: " + describe(b))
         }
-        if (samples < warmupSamples) {
-            return AiDecision(false, statP, listOf("aprendiendo del flujo L2 ($samples/$warmupSamples muestras)"), true)
-        }
-
-        val need = (breakeven(costRate) + minEdge).coerceIn(0.48, 0.55)
-        if (statP < need - 0.03) {
-            reasons.add("modelo estadístico rechaza setup (" + pct(statP) + "% < " + pct(need) + "%)")
+        // El warm-up reduce la confianza implícita, pero nunca bloquea indefinidamente
+        // las entradas: el modelo puede aprender con resultados reales desde el inicio.
+        val warmup = samples < warmupSamples
+        val adjustedP = if (warmup) (statP * 0.85 + 0.075).coerceIn(0.05, 0.98) else statP
+        val need = (breakeven(costRate) + minEdge).coerceIn(0.42, 0.55)
+        if (adjustedP < need - 0.05) {
+            reasons.add("modelo estadístico rechaza setup (" + pct(adjustedP) + "% < " + pct(need) + "%)")
         }
 
         val freshNano = nanoDecision?.takeIf { System.currentTimeMillis() - it.timestamp <= 10_000L }
         if (freshNano != null) {
-            val blendedP = (freshNano.confidence * 0.50 + statP * 0.50).coerceIn(0.05, 0.98)
-            if (freshNano.action == "HOLD") {
-                reasons.add("Gemini Nano: esperar (${freshNano.reason})")
-                return AiDecision(false, blendedP, reasons, false, nanoSource = true)
+            val blendedP = (freshNano.confidence * 0.35 + adjustedP * 0.65).coerceIn(0.05, 0.98)
+            // Nano solo puede vetar con una opinión muy segura y si el modelo estadístico
+            // también estima que la operación no cubre el punto de equilibrio.
+            if ((freshNano.action == "HOLD" || freshNano.action != f.side) &&
+                freshNano.confidence >= 0.85 && adjustedP < breakeven(costRate)) {
+                return AiDecision(false, blendedP, listOf("Filtro de seguridad Nano + estadística: ${freshNano.reason}"), warmup, nanoSource = true)
             }
-            if (freshNano.action != f.side) {
-                reasons.add("Gemini Nano detecta giro a ${freshNano.action}")
-                return AiDecision(false, blendedP, reasons, false, nanoSource = true)
-            }
-            if (blendedP < need) {
+            if (blendedP < need - 0.05) {
                 reasons.add("confianza combinada " + pct(blendedP) + "% < " + pct(need) + "%")
             }
-            val safeStop = freshNano.stopRate.coerceIn(0.0018, 0.0032)
-            val safeTarget = max(freshNano.targetRate, max(0.0044, safeStop * 2.3))
+            val safeStop = freshNano.stopRate.coerceIn(0.0014, 0.0032)
+            val safeTarget = max(freshNano.targetRate, max(0.0022, safeStop * 1.35))
             return AiDecision(
                 allow = reasons.isEmpty(),
                 pWin = blendedP,
                 reasons = if (reasons.isEmpty()) listOf("Gemini Nano (${pct(blendedP)}%): ${freshNano.reason}") else reasons,
-                warmup = false,
+                warmup = warmup,
                 customStopRate = safeStop,
                 customTargetRate = safeTarget,
                 nanoSource = true
             )
         }
 
-        if (statP < need) reasons.add("probabilidad estimada " + pct(statP) + "% < " + pct(need) + "%")
-        return AiDecision(reasons.isEmpty(), statP, reasons, false)
+        if (adjustedP < need - 0.02) reasons.add("probabilidad estimada " + pct(adjustedP) + "% < " + pct(need) + "%")
+        return AiDecision(reasons.isEmpty(), adjustedP, reasons, warmup)
     }
 
     private fun isBlocking(key: String, costRate: Double): Boolean {
@@ -283,10 +273,10 @@ class LearningBrain {
         val best = variantStats.entries.filter { it.value.wins + it.value.losses >= 6.0 }
             .maxByOrNull { it.value.edge / (it.value.wins + it.value.losses) } ?: return
         when (best.key) {
-            "Francotirador" -> { stopRate = 0.0016; targetRate = 0.0040; bestVariantLabel = "Francotirador (SL 16 / TP 40 bps)" }
-            "Tendencial" -> { stopRate = 0.0022; targetRate = 0.0058; bestVariantLabel = "Tendencial (SL 22 / TP 58 bps)" }
-            "Equilibrada" -> { stopRate = 0.0018; targetRate = 0.0046; bestVariantLabel = "Equilibrada (SL 18 / TP 46 bps)" }
-            "Impulso60s" -> { stopRate = 0.0017; targetRate = 0.0042; bestVariantLabel = "Impulso Rápido (SL 17 / TP 42 bps)" }
+            "Francotirador" -> { stopRate = 0.0014; targetRate = 0.0022; bestVariantLabel = "Francotirador (SL 14 / TP 22 bps)" }
+            "Tendencial" -> { stopRate = 0.0018; targetRate = 0.0030; bestVariantLabel = "Tendencial (SL 18 / TP 30 bps)" }
+            "Equilibrada" -> { stopRate = 0.0014; targetRate = 0.0022; bestVariantLabel = "Equilibrada (SL 14 / TP 22 bps)" }
+            "Impulso60s" -> { stopRate = 0.0014; targetRate = 0.0022; bestVariantLabel = "Impulso Rápido (SL 14 / TP 22 bps)" }
         }
         clamp(costRate)
     }
@@ -312,6 +302,11 @@ class LearningBrain {
             if (!aiNote.isNullOrBlank()) addLesson("gemini", "Lección Gemini Nano: $aiNote")
         }
         return text
+    }
+
+    @Synchronized
+    fun learnHistoricalSample(features: TradeFeatures, won: Boolean, netRate: Double) {
+        record(features, won, netRate, false, "Histórico BTC", 0L, 0.0014)
     }
 
     private fun record(f: TradeFeatures, won: Boolean, rate: Double, real: Boolean, reason: String, durationMs: Long, costRate: Double) {
@@ -364,11 +359,11 @@ class LearningBrain {
         }
     }
 
-    fun clamp(costRate: Double = 0.0014) {
+    fun clamp(costRate: Double = 0.0004) {
         imbEntry = imbEntry.coerceIn(0.12, 0.38)
         persistEvals = persistEvals.coerceIn(2, 5)
-        stopRate = stopRate.coerceIn(0.0015, 0.0032)
-        targetRate = targetRate.coerceIn(max(0.0040, costRate * 2.8), 0.0095)
+        stopRate = stopRate.coerceIn(0.0014, 0.0032)
+        targetRate = targetRate.coerceIn(max(0.0022, costRate * 2.8), 0.0095)
         minEdge = minEdge.coerceIn(-0.05, 0.06)
         warmupSamples = warmupSamples.coerceIn(5, 20)
         dailyLossLimit = dailyLossLimit.coerceIn(0.03, 0.25)
@@ -376,9 +371,9 @@ class LearningBrain {
 
     fun applyMode(name: String): Boolean {
         when (name) {
-            "conservador" -> { imbEntry = 0.22; persistEvals = 4; stopRate = 0.0018; targetRate = 0.0048; minEdge = 0.01; warmupSamples = 18; dailyLossLimit = 0.08 }
-            "normal" -> { imbEntry = 0.16; persistEvals = 3; stopRate = 0.0018; targetRate = 0.0046; minEdge = -0.01; warmupSamples = 15; dailyLossLimit = 0.15 }
-            "agresivo" -> { imbEntry = 0.13; persistEvals = 2; stopRate = 0.0016; targetRate = 0.0042; minEdge = -0.03; warmupSamples = 8; dailyLossLimit = 0.25 }
+            "conservador" -> { imbEntry = 0.22; persistEvals = 4; stopRate = 0.0018; targetRate = 0.0030; minEdge = 0.01; warmupSamples = 18; dailyLossLimit = 0.08 }
+            "normal" -> { imbEntry = 0.16; persistEvals = 3; stopRate = 0.0016; targetRate = 0.0026; minEdge = -0.01; warmupSamples = 15; dailyLossLimit = 0.15 }
+            "agresivo" -> { imbEntry = 0.12; persistEvals = 2; stopRate = 0.0014; targetRate = 0.0022; minEdge = -0.03; warmupSamples = 5; dailyLossLimit = 0.25 }
             else -> return false
         }
         mode = name
@@ -473,6 +468,7 @@ class LearningBrain {
             .put("recent", recent).put("lessons", lessons).put("chat", chat).put("tunedAt", tunedAt)
             .put("imbEntry", imbEntry).put("persist", persistEvals).put("target", targetRate).put("stop", stopRate)
             .put("minEdge", minEdge).put("warmup", warmupSamples).put("daily", dailyLossLimit).put("mode", mode).put("hours", hours)
+            .put("fastMakerConfigVersion", 1)
     }
 
     fun load(o: JSONObject?) {
@@ -495,18 +491,28 @@ class LearningBrain {
                 }
             }
             copyInto(recent, o.optJSONArray("recent")); copyInto(lessons, o.optJSONArray("lessons")); copyInto(chat, o.optJSONArray("chat"))
-            imbEntry = o.optDouble("imbEntry", imbEntry).coerceAtMost(0.24)
-            persistEvals = o.optInt("persist", persistEvals).coerceAtMost(4)
-            targetRate = o.optDouble("target", targetRate).coerceIn(0.0040, 0.0095)
-            stopRate = o.optDouble("stop", 0.0018).coerceIn(0.0015, 0.0025)
-            minEdge = o.optDouble("minEdge", minEdge).coerceAtMost(0.01)
-            warmupSamples = o.optInt("warmup", 15).coerceIn(5, 18)
+            imbEntry = o.optDouble("imbEntry", imbEntry).coerceIn(0.12, 0.38)
+            persistEvals = o.optInt("persist", persistEvals).coerceIn(2, 5)
+            targetRate = o.optDouble("target", targetRate).coerceIn(0.0022, 0.0095)
+            stopRate = o.optDouble("stop", 0.0014).coerceIn(0.0014, 0.0032)
+            minEdge = o.optDouble("minEdge", minEdge).coerceIn(-0.05, 0.06)
+            warmupSamples = o.optInt("warmup", 5).coerceIn(5, 20)
             dailyLossLimit = o.optDouble("daily", dailyLossLimit); mode = o.optString("mode", mode)
+            if (o.optInt("fastMakerConfigVersion", 0) < 1) {
+                // Migración única: el backup antiguo tenía TP/SL demasiado amplios para el perfil Maker rápido.
+                imbEntry = 0.12
+                persistEvals = 2
+                targetRate = 0.0022
+                stopRate = 0.0014
+                minEdge = -0.03
+                warmupSamples = 5
+                mode = "agresivo"
+            }
             blockedHoursLocal.clear()
             val hs = o.optJSONArray("hours"); if (hs != null) for (i in 0 until hs.length()) blockedHoursLocal.add(hs.optInt(i))
             shadows.clear()
             clamp()
-            refreshBlocks(0.0014)
+            refreshBlocks(0.0004)
         } catch (_: Exception) { }
     }
 

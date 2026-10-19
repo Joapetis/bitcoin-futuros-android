@@ -33,8 +33,14 @@ data class BotSnapshot(
 )
 
 object NativeTradingEngine {
-    private const val TAKER_FEE_RATE = 0.0005
-    private const val SLIPPAGE_RATE = 0.0002
+    private const val TAKER_FEE_RATE = 0.0005       // 0.05% en stops/emergencias
+    private const val MAKER_FEE_RATE = 0.0002       // 0.02% en entradas y objetivos limit
+    private const val SLIPPAGE_RATE = 0.0001        // 0.01% en ejecuciones a mercado
+    private const val SCALP_MAX_HOLD_MS = 90_000L
+    private const val SCALP_COOLDOWN_MS = 4_000L
+    private const val SCALP_MAX_SPREAD_BPS = 4.5
+    private const val SCALP_MICRO_EDGE_BPS = 0.02
+    private const val SCALP_BOOK_MAX_AGE_MS = 8_000L
     private val symbols = listOf("BTC-USDT")
     private val lock = Any()
     private val bots = linkedMapOf<String, JSONObject>()
@@ -68,6 +74,14 @@ object NativeTradingEngine {
     private var backupTreeUri: Uri? = null
     private val levOptions = listOf(1, 2, 3, 5, 10, 20, 50, 75, 100)
     @Volatile private var currentMtfScore = 0.0
+    private val ioExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "disk-io").apply { isDaemon = true }
+    }
+    @Volatile private var lastSaveQueuedAt = 0L
+    @Volatile private var snapshotsCache: List<BotSnapshot> = emptyList()
+    private var lastExternalBackupAt = 0L
+    private var runningBuyVol = 0.0
+    private var runningSellVol = 0.0
 
     fun init(context: Context) = synchronized(lock) {
         if (initialized) return
@@ -100,12 +114,20 @@ object NativeTradingEngine {
         }
         bots["BTC-USDT"]?.put("tradingMode", "SWING")
         loadBrainLocked()
+        updateSnapshotsCacheLocked()
         saveLocked()
         initialized = true
         startQuoteStreamsLocked()
         startTradingLoopLocked()
         NewsIntelligence.init(app)
         PixelAi.prepare()
+        HistoricalBitcoinLearning.start(app, brain) { status ->
+            synchronized(lock) {
+                bots["BTC-USDT"]?.put("historicalLearningStatus", status)
+                bots["BTC-USDT"]?.put("lastSignal", status)
+                saveLocked()
+            }
+        }
     }
 
     fun isRunning(): Boolean = synchronized(lock) { bots["BTC-USDT"]?.optBoolean("enabled", true) == true }
@@ -114,19 +136,21 @@ object NativeTradingEngine {
     fun setRisk(symbol: String, risk: Double) = synchronized(lock) { bots[symbol]?.put("risk", risk.coerceIn(1.0, 100.0)); saveLocked() }
     fun setLeverage(symbol: String, leverage: Int) = synchronized(lock) { bots[symbol]?.put("leverage", if (leverage in levOptions) leverage else 100); saveLocked() }
 
-    fun snapshots(): List<BotSnapshot> = synchronized(lock) {
-        symbols.map { s ->
-            val b = bots[s]!!
+    fun snapshots(): List<BotSnapshot> = snapshotsCache
+
+    private fun updateSnapshotsCacheLocked() {
+        snapshotsCache = symbols.mapNotNull { s ->
+            val b = bots[s] ?: return@mapNotNull null
             val p = b.optDouble("price", 0.0)
             val entry = b.optDouble("entry", 0.0)
             val side = b.optString("side", "FLAT")
             val floating = if (entry > 0 && p > 0 && side != "FLAT") (if (side == "LONG") p - entry else entry - p) * b.optDouble("qty", 0.0) else 0.0
             val balance = b.optDouble("balance", 100.0)
             BotSnapshot(s, balance, p, balance - b.optDouble("initial", 100.0) - b.optDouble("injectedCapital", 0.0) + floating,
-                side, entry, b.optInt("trades"), b.optInt("wins"), b.optString("lastSignal"),
-                b.optInt("leverage", 100), b.optDouble("risk", 5.0), brain.samples, balance + floating)
+                side, entry, b.optInt("trades"), b.optInt("wins"), b.optString("lastSignal"), b.optInt("leverage", 100), b.optDouble("risk", 5.0), brain.samples, balance + floating)
         }
     }
+
 
     fun jointOperationState(): JSONObject = synchronized(lock) {
         val b = bots["BTC-USDT"] ?: JSONObject()
@@ -208,12 +232,12 @@ object NativeTradingEngine {
                                 val tradeSide = row.optString("side").uppercase(Locale.US)
                                 synchronized(lock) {
                                     if (size > 0.0 && (tradeSide == "BUY" || tradeSide == "SELL")) {
-                                        flowEvents.addLast(now to (if (tradeSide == "BUY") size else -size))
-                                        while (flowEvents.size > 5000) flowEvents.removeFirst()
+                                        addFlowEventLocked(now, if (tradeSide == "BUY") size else -size)
                                     }
                                     if (price > 0) {
                                         pionexQuotes["BTC-USDT"] = price; pionexQuoteAt["BTC-USDT"] = now
                                         bots["BTC-USDT"]?.put("price", price)?.put("priceSource", "PIONEX_TRADE")
+                                        updateSnapshotsCacheLocked()
                                         if (pionexBookBids.isEmpty() || pionexBookAsks.isEmpty() || now - pionexBookUpdatedAt > 3500L) synthesizeBookFromTradeLocked(price, now)
                                     }
                                 }
@@ -264,11 +288,31 @@ object NativeTradingEngine {
         })
     }
 
+    private fun addFlowEventLocked(now: Long, signedSize: Double) {
+        if (!signedSize.isFinite() || signedSize == 0.0) return
+        flowEvents.addLast(now to signedSize)
+        if (signedSize > 0.0) runningBuyVol += signedSize else runningSellVol += -signedSize
+        pruneFlowEventsLocked(now)
+        while (flowEvents.size > 5000) {
+            val removed = flowEvents.removeFirst().second
+            if (removed > 0.0) runningBuyVol = max(0.0, runningBuyVol - removed)
+            else runningSellVol = max(0.0, runningSellVol + removed)
+        }
+    }
+
+    private fun pruneFlowEventsLocked(now: Long) {
+        while (flowEvents.isNotEmpty() && now - flowEvents.first().first > 30_000L) {
+            val removed = flowEvents.removeFirst().second
+            if (removed > 0.0) runningBuyVol = max(0.0, runningBuyVol - removed)
+            else runningSellVol = max(0.0, runningSellVol + removed)
+        }
+    }
+
     private fun synthesizeBookFromTradeLocked(price: Double, now: Long) {
         if (price <= 0.0) return
-        while (flowEvents.isNotEmpty() && now - flowEvents.first().first > 20_000L) flowEvents.removeFirst()
-        var buyVol = 1.2; var sellVol = 1.2
-        for (e in flowEvents) { if (e.second > 0) buyVol += e.second else sellVol -= e.second }
+        pruneFlowEventsLocked(now)
+        val buyVol = 1.2 + runningBuyVol
+        val sellVol = 1.2 + runningSellVol
         val halfSpread = max(0.05, price * 0.000025)
         pionexBookBids.clear(); pionexBookAsks.clear()
         for (lvl in 0 until 10) {
@@ -350,8 +394,7 @@ object NativeTradingEngine {
                                     val sz = row.optString("v").toDoubleOrNull() ?: 0.0
                                     val s = row.optString("S").uppercase(Locale.US)
                                     if (sz > 0.0 && (s == "BUY" || s == "SELL")) {
-                                        flowEvents.addLast(now to (if (s == "BUY") sz else -sz))
-                                        while (flowEvents.size > 5000) flowEvents.removeFirst()
+                                        addFlowEventLocked(now, if (s == "BUY") sz else -sz)
                                     }
                                 }
                             }
@@ -424,7 +467,7 @@ object NativeTradingEngine {
         if (side == "FLAT" || entry <= 0.0 || mark <= 0.0 || qty <= 0.0) return@synchronized 0.0
         val exit = mark * (if (side == "LONG") 1.0 - SLIPPAGE_RATE else 1.0 + SLIPPAGE_RATE)
         val gross = (if (side == "LONG") exit - entry else entry - exit) * qty
-        val fees = (entry * qty + exit * qty) * TAKER_FEE_RATE
+        val fees = entry * qty * MAKER_FEE_RATE + exit * qty * TAKER_FEE_RATE
         gross - fees - fundingCostLocked(entry * qty, side, b.optLong("entryTime", now), now)
     }
 
@@ -437,7 +480,7 @@ object NativeTradingEngine {
         if (side == "FLAT" || entry <= 0.0 || mark <= 0.0 || qty <= 0.0) { saveLocked(); return@synchronized 0.0 }
         val exit = mark * (if (side == "LONG") 1.0 - SLIPPAGE_RATE else 1.0 + SLIPPAGE_RATE)
         val gross = (if (side == "LONG") exit - entry else entry - exit) * qty
-        val fees = (entry * qty + exit * qty) * TAKER_FEE_RATE
+        val fees = entry * qty * MAKER_FEE_RATE + exit * qty * TAKER_FEE_RATE
         val heldMs = max(0L, now - b.optLong("entryTime", now))
         val funding = fundingCostLocked(entry * qty, side, b.optLong("entryTime", now), now)
         val net = gross - fees - funding
@@ -533,7 +576,7 @@ object NativeTradingEngine {
             val readBack = resolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                 ?: throw IllegalStateException("No se pudo verificar el archivo de respaldo")
             val verified = JSONObject(readBack)
-            if (verified.optLong("savedAt") != root.optLong("savedAt") || verified.optJSONObject("bots") != null) {
+            if (verified.optLong("savedAt") != root.optLong("savedAt") || verified.optJSONArray("bots") == null) {
                 throw IllegalStateException("El respaldo no coincide con el estado guardado")
             }
             val rows = verified.optJSONArray("bots") ?: throw IllegalStateException("Respaldo sin bots")
@@ -548,7 +591,7 @@ object NativeTradingEngine {
     private var tradingStatusAt = 0L
     private val midHistory = ArrayDeque<Pair<Long, Double>>()
     private val flowEvents = ArrayDeque<Pair<Long, Double>>()
-    private fun costRate(): Double = 2.0 * (TAKER_FEE_RATE + SLIPPAGE_RATE)
+    private fun costRate(): Double = 2.0 * MAKER_FEE_RATE
     private fun barDurationMs(bar: String): Long = when (bar) { "1m" -> 60_000L; "5m" -> 5L*60_000L; "15m" -> 15L*60_000L; "1H" -> 60L*60_000L; "4H" -> 4L*60L*60_000L; "1D" -> 24L*60L*60_000L; else -> 60_000L }
     private fun closedCandles(candles:List<CandleSnapshot>,bar:String,now:Long):List<CandleSnapshot>{
         val duration=barDurationMs(bar)
@@ -577,14 +620,14 @@ object NativeTradingEngine {
 
             // El motor solicita por sí mismo las tres temporalidades necesarias.
             // No depende de que el usuario abra la pantalla del gráfico.
-            val requiredBars = listOf("15m", "1H", "4H")
+            val requiredBars = listOf("1m", "5m", "15m", "1H", "4H")
             requiredBars.forEach { bar ->
                 val key = "BTC-USDT|$bar"
                 val candles = chartCandleCache[key]
                 val lastClosed = candles?.lastOrNull()?.time ?: 0L
                 // time es la apertura de vela: refrescar poco despues de su cierre.
                 val stale = candles == null || candles.isEmpty() || lastClosed <= 0L || now >= lastClosed + barDurationMs(bar) + 10_000L
-                val retryMs = when (bar) { "15m" -> 15_000L; "1H" -> 30_000L; else -> 60_000L }
+                val retryMs = when (bar) { "1m" -> 5_000L; "5m" -> 8_000L; "15m" -> 12_000L; "1H" -> 30_000L; else -> 60_000L }
                 val lastAttempt = chartLastAttemptAt[key] ?: 0L
                 if (stale && now - lastAttempt >= retryMs && chartRequests.add(key)) {
                     chartLastAttemptAt[key] = now
@@ -609,45 +652,61 @@ object NativeTradingEngine {
                 tradingStatusLocked(b, now, "Trading pausado · sin nuevas entradas")
                 return
             }
+            val c1m = chartCandleCache["BTC-USDT|1m"]
+            val c5m = chartCandleCache["BTC-USDT|5m"]
             val c15 = chartCandleCache["BTC-USDT|15m"]
-            val c1h = chartCandleCache["BTC-USDT|1H"]
-            val c4h = chartCandleCache["BTC-USDT|4H"]
-            if(c15==null||c15.size<60||c1h==null||c1h.size<25||c4h==null||c4h.size<15){
-                tradingStatusLocked(b,now,"Cargando velas cerradas · 15m ${c15?.size?:0}/60 · 1H ${c1h?.size?:0}/25 · 4H ${c4h?.size?:0}/15");return
+            if ((c1m == null || c1m.size < 60) && (c5m == null || c5m.size < 60) && (c15 == null || c15.size < 60)) {
+                tradingStatusLocked(b, now, "Cargando velas BTC · 1m/5m/15m")
+                return
             }
             trendEntryLocked(b, now)
             if (b.optString("side", "FLAT") == "FLAT") {
                 val last = b.optString("lastSignal", "")
-                if (!last.startsWith("Swing filtrado")) tradingStatusLocked(b, now, "Analizando estrategia Swing BTC · 15m/1H/4H")
+                if (!last.startsWith("Swing filtrado") && !last.startsWith("Señal descartada")) tradingStatusLocked(b, now, "Analizando BTC · 1m/5m/15m + contexto 1H/4H")
             }
         }
     }
 
     private fun trendEntryLocked(b: JSONObject, now: Long) {
         if (!b.optBoolean("enabled", true) || b.optString("side", "FLAT") != "FLAT") return
-        if (now - b.optLong("swingLastSignalAt", 0L) < 60_000L) return
-        val c15 = chartCandleCache["BTC-USDT|15m"] ?: return
-        val c1h = chartCandleCache["BTC-USDT|1H"] ?: return
-        val c4h = chartCandleCache["BTC-USDT|4H"] ?: return
-        val signal = BitcoinSwingStrategy.evaluate(c15, c1h, c4h)
+        if (now - b.optLong("swingLastSignalAt", 0L) < SCALP_COOLDOWN_MS) return
+        val c1m = chartCandleCache["BTC-USDT|1m"]
+        val c5m = chartCandleCache["BTC-USDT|5m"]
+        val c15 = chartCandleCache["BTC-USDT|15m"]
+        val c1h = chartCandleCache["BTC-USDT|1H"]
+        val c4h = chartCandleCache["BTC-USDT|4H"]
+        val signal = (if (c1m != null && c1m.size >= 60) BitcoinSwingStrategy.evaluateFast(c1m, c15, c1h, "1m") else null)
+            ?: (if (c5m != null && c5m.size >= 60) BitcoinSwingStrategy.evaluateFast(c5m, c15, c1h, "5m") else null)
+            ?: (if (c15 != null && c15.size >= 60 && c1h != null && c4h != null) BitcoinSwingStrategy.evaluate(c15, c1h, c4h) else null)
         if (signal == null) {
-            b.put("lastSignal", "Sin señal confirmada · estrategia Swing esperando tendencia/ruptura")
+            b.put("lastSignal", "Sin señal BTC · evaluando tendencia, ruptura y rango en marcos rápidos")
             return
         }
         val price = b.optDouble("price", signal.price); val balance = b.optDouble("balance", 100.0)
         if (price <= 0.0 || balance <= 1.0) return
         val side=signal.side;val sign=if(side=="LONG")1.0 else -1.0
         val bookAgeMs=if(pionexBookUpdatedAt>0L)now-pionexBookUpdatedAt else Long.MAX_VALUE
-        val liveBook=if(bookAgeMs in 0L..2500L&&pionexBookSource!="Tape L2")L2Metrics.compute(pionexBookBids,pionexBookAsks)else null
-        val flowWindow=flowEvents.filter{now-it.first in 0L..30_000L};val flowAbs=flowWindow.sumOf{abs(it.second)}
-        val flowScore=if(flowAbs>0.0)(flowWindow.sumOf{it.second}/flowAbs).coerceIn(-1.0,1.0)else 0.0
+        val liveBook=if(bookAgeMs in 0L..SCALP_BOOK_MAX_AGE_MS&&pionexBookSource!="Tape L2")L2Metrics.compute(pionexBookBids,pionexBookAsks)else null
+        pruneFlowEventsLocked(now)
+        val flowAbs = runningBuyVol + runningSellVol
+        val flowScore = if (flowAbs > 0.0) ((runningBuyVol - runningSellVol) / flowAbs).coerceIn(-1.0, 1.0) else 0.0
+        if (liveBook != null && liveBook.spreadBps > SCALP_MAX_SPREAD_BPS) {
+            b.put("lastSignal", "Entrada omitida · spread ${String.format(Locale.US, "%.2f", liveBook.spreadBps)} bps supera el máximo")
+            return
+        }
+        if (liveBook != null && liveBook.micropriceEdgeBps * (if (side == "LONG") 1.0 else -1.0) < -SCALP_MICRO_EDGE_BPS) {
+            b.put("lastSignal", "Entrada omitida · microprecio contradice la dirección")
+            return
+        }
         val features=TradeFeatures(side,liveBook?.imbalance?:0.0,liveBook?.micropriceEdgeBps?:0.0,liveBook?.spreadBps?:1.0,
             flowScore,signal.atr/price*10_000.0,java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).get(java.util.Calendar.HOUR_OF_DAY),
             pionexNextFundingRate,0.0,currentMtfScore)
         val probability=brain.predict(features).coerceIn(0.0,1.0)
         val costs = costRate()
-        val expected = signal.targetDistance / price
-        val stopRateCandidate = signal.stopDistance / price
+        // La configuración rápida del LearningBrain gobierna TP/SL; no se conserva
+        // el objetivo ATR más amplio de Swing que haría inoperantes estos parámetros.
+        val expected = brain.targetRate
+        val stopRateCandidate = brain.stopRate
         // El filtro evita señales con objetivo inferior al coste total, pero no exige que
         // un modelo sin suficientes cierres tenga ya una ventaja estadística demostrada.
         val expectedNet = probability * (expected - costs) - (1.0 - probability) * (stopRateCandidate + costs)
@@ -655,15 +714,16 @@ object NativeTradingEngine {
             b.put("lastSignal", String.format(Locale.US, "Señal descartada por costes/riesgo · p %.0f%% · EV %.3f%%", probability * 100.0, expectedNet * 100.0))
             return
         }
-        val stopRate = (signal.stopDistance / price).coerceIn(0.004, 0.035)
-        val targetRate = (signal.targetDistance / price).coerceIn(0.008, 0.08)
+        val stopRate = brain.stopRate.coerceIn(0.0014, 0.0032)
+        val targetRate = brain.targetRate.coerceIn(0.0022, 0.0095)
         val risk = (b.optDouble("risk", 5.0) / 100.0).coerceIn(0.01, 0.03) * (if (brain.lossStreak >= 3) 0.5 else 1.0)
         val sized = CompoundSizing.size(balance, price, b.optInt("leverage", 100), stopRate, risk, costs) ?: return
         val q1=now-(pionexQuoteAt["BTC-USDT"]?:0L);val q2=now-(bybitQuoteAt["BTC-USDT"]?:0L)
         val quoteAgeMs=listOf(q1,q2).filter{it>=0L}.minOrNull()?:Long.MAX_VALUE
-        val executable=when{liveBook!=null->if(side=="LONG")liveBook.ask else liveBook.bid;quoteAgeMs<=5000L->price;else->0.0}
+        // Simulación de entrada Limit Maker en la punta solicitada: LONG al Bid y SHORT al Ask.
+        val executable=when{liveBook!=null->if(side=="LONG")liveBook.bid else liveBook.ask;quoteAgeMs<=5000L->price;else->0.0}
         if(executable<=0.0){b.put("lastSignal","Entrada omitida · cotización/libro sin datos ejecutables recientes");return}
-        val entry=executable*(1.0+sign*SLIPPAGE_RATE)
+        val entry=executable
         val stop=entry*(1.0-sign*stopRate);val target=entry*(1.0+sign*targetRate);val liq=entry*(1.0-sign*sized.liquidationDistanceRate)
         val audit=b.optJSONArray("decisionAudit")?:JSONArray()
         audit.put(JSONObject().put("decisionAt",now).put("candleTime",signal.candleTime).put("candleAgeMs",max(0L,now-signal.candleTime))
@@ -672,14 +732,14 @@ object NativeTradingEngine {
             .put("bid",liveBook?.bid?:JSONObject.NULL).put("ask",liveBook?.ask?:JSONObject.NULL).put("spreadBps",liveBook?.spreadBps?:JSONObject.NULL)
             .put("imbalance",liveBook?.imbalance?:JSONObject.NULL).put("microprice",liveBook?.microprice?:JSONObject.NULL).put("micropriceEdgeBps",liveBook?.micropriceEdgeBps?:JSONObject.NULL)
             .put("flowScore",flowScore).put("mtfScore",currentMtfScore).put("side",side).put("executableReference",executable).put("assumedFill",entry)
-            .put("assumedSlippageRate",SLIPPAGE_RATE).put("feeRatePerSide",TAKER_FEE_RATE))
+            .put("assumedSlippageRate",0.0).put("feeRatePerSide",MAKER_FEE_RATE))
         while(audit.length()>500)audit.remove(0)
         b.put("decisionAudit",audit).put("side",side).put("entry",entry).put("qty",sized.qty).put("stop",stop).put("target",target)
             .put("liqPrice",liq).put("entryTime",now).put("entryCandle",signal.candleTime)
             .put("entryBookTimestamp",pionexBookUpdatedAt).put("entryBookSequence",pionexBookSequence).put("entryBookSource",pionexBookSource).put("entryBookUsed",liveBook!=null)
             .put("entryBid",liveBook?.bid?:0.0).put("entryAsk",liveBook?.ask?:0.0).put("entrySpreadBps",liveBook?.spreadBps?:0.0)
             .put("entryImbalance",liveBook?.imbalance?:0.0).put("entryMicropriceEdgeBps",liveBook?.micropriceEdgeBps?:0.0)
-            .put("entryExecutableReference",executable).put("entrySlippageRate",SLIPPAGE_RATE).put("entryFeeRate",TAKER_FEE_RATE)
+            .put("entryExecutableReference",executable).put("entrySlippageRate",0.0).put("entryFeeRate",MAKER_FEE_RATE)
             .put("entryStrategy","SWING_"+signal.regime).put("entryEffLeverage",sized.effectiveLeverage).put("entryPredictedWin",probability)
             .put("swingTargetRate",targetRate).put("maxFavorablePrice",entry).put("maxAdversePrice",entry).put("trailingActive",false)
             .put("entryAi",features.toJson()).put("swingLastSignalAt",now)
@@ -722,13 +782,15 @@ object NativeTradingEngine {
         val liquidated = liq > 0.0 && (if (side == "LONG") mark <= liq else mark >= liq)
         val stopHit = if (side == "LONG") mark <= activeStop else mark >= activeStop
         val targetHit = if (side == "LONG") mark >= target else mark <= target
+        val timedOut = now - b.optLong("entryTime", now) >= SCALP_MAX_HOLD_MS
         val reason = when {
             liquidated -> "Liquidación"
             stopHit -> if (b.optBoolean("trailingActive", false) && favorableMove > 0.0) "Stop en Ganancia (Swing trailing)" else "Stop Swing"
             targetHit -> "Objetivo Swing"
+            timedOut -> "Tiempo máximo scalp (90 s)"
             else -> return
         }
-        val rawExit = if (liquidated) liq else if (stopHit) activeStop else target
+        val rawExit = if (liquidated) liq else if (stopHit) activeStop else if (targetHit) target else mark
         closeTradeLocked(b, reason, rawExit, now)
     }
 
@@ -738,10 +800,15 @@ object NativeTradingEngine {
         val qty = b.optDouble("qty", 0.0)
         val entryNotional = qty * entry
         val liquidated = reason == "Liquidación"
-        val exitPrice = if (liquidated) rawExit else rawExit * (if (side == "LONG") 1.0 - SLIPPAGE_RATE else 1.0 + SLIPPAGE_RATE)
+        val isMakerExit = reason.startsWith("Objetivo") || reason == "Toma de ganancia por giro de libro"
+        val exitPrice = when {
+            liquidated -> rawExit
+            isMakerExit -> rawExit
+            else -> rawExit * (if (side == "LONG") 1.0 - SLIPPAGE_RATE else 1.0 + SLIPPAGE_RATE)
+        }
         val gross = (if (side == "LONG") exitPrice - entry else entry - exitPrice) * qty
-        val entryFee=entryNotional*b.optDouble("entryFeeRate",TAKER_FEE_RATE);val exitNotional=qty*exitPrice
-        val exitFee=exitNotional*TAKER_FEE_RATE;val fee=entryFee+exitFee
+        val entryFee=entryNotional*b.optDouble("entryFeeRate",MAKER_FEE_RATE);val exitNotional=qty*exitPrice
+        val exitFee=exitNotional*(if (isMakerExit) MAKER_FEE_RATE else TAKER_FEE_RATE);val fee=entryFee+exitFee
         val entryTime=b.optLong("entryTime",now);val funding=fundingCostLocked(entryNotional,side,entryTime,now)
         val balanceBefore = b.optDouble("balance", 100.0)
         val net = if (liquidated) -balanceBefore else gross - fee - funding
@@ -758,8 +825,8 @@ object NativeTradingEngine {
             .put("type", "TRADE").put("symbol", "BTC-USDT").put("time", now).put("entryTime", entryTime)
             .put("side", side).put("entry", entry).put("exit", exitPrice).put("qty", qty)
             .put("entryNotional",entryNotional).put("exitNotional",exitNotional).put("gross",gross).put("entryFee",entryFee).put("exitFee",exitFee).put("fees",fee)
-            .put("feeRatePerSide",TAKER_FEE_RATE).put("entryFeeRate",b.optDouble("entryFeeRate",TAKER_FEE_RATE))
-            .put("entrySlippageRate",b.optDouble("entrySlippageRate",SLIPPAGE_RATE)).put("exitSlippageRate",SLIPPAGE_RATE)
+            .put("feeRatePerSide",if (isMakerExit) MAKER_FEE_RATE else TAKER_FEE_RATE).put("entryFeeRate",b.optDouble("entryFeeRate",MAKER_FEE_RATE))
+            .put("entrySlippageRate",b.optDouble("entrySlippageRate",0.0)).put("exitSlippageRate",if (isMakerExit || liquidated) 0.0 else SLIPPAGE_RATE)
             .put("funding",funding).put("fundingMethod","tasas históricas disponibles + previsión registrada")
             .put("entryBookTimestamp",b.optLong("entryBookTimestamp",0L)).put("entryBookSequence",b.optLong("entryBookSequence",0L))
             .put("entryBookSource",b.optString("entryBookSource","sin libro")).put("entryBookUsed",b.optBoolean("entryBookUsed",false))
@@ -785,7 +852,7 @@ object NativeTradingEngine {
             h.put(JSONObject().put("type", "RECHARGE").put("time", now).put("amount", refill)
                 .put("reason", "Cuenta simulada recargada para continuar entrenamiento").put("balanceAfter", refill).put("pnl", 0.0))
         }
-        saveLocked()
+        saveLocked(forceNow = true)
     }
 
     fun compoundingStatus(): String = synchronized(lock) {
@@ -923,17 +990,42 @@ object NativeTradingEngine {
         return if (entry > 0 && price > 0 && qty > 0 && side != "FLAT") (if (side == "LONG") price - entry else entry - price) * qty else 0.0
     }
 
-    private fun saveLocked() {
+    private fun saveLocked(forceNow: Boolean = false) {
         if (!::app.isInitialized) return
-        try {
-            val savedAt = System.currentTimeMillis()
+        updateSnapshotsCacheLocked()
+        val now = System.currentTimeMillis()
+        if (!forceNow && now - lastSaveQueuedAt < 5_000L) return
+        lastSaveQueuedAt = now
+        val snapshotJson = try {
             bots["BTC-USDT"]?.put("aiBrain", brain.toJson())?.put("learned", brain.samples)
-            val arr = JSONArray(); bots.values.forEach { arr.put(it) }
-            val root = JSONObject().put("schemaVersion", 4).put("savedAt", savedAt).put("appVersion", "0.21-swing-ai-backup").put("bots", arr)
-            val backup = File(app.filesDir, "CryptoFutures"); backup.mkdirs()
-            File(backup, "state-v1.json.tmp").writeText(root.toString())
-            File(backup, "state-v1.json.tmp").renameTo(File(backup, "state-v1.json"))
-            saveUserBackup(root)
-        } catch (e: Exception) { lastError = "No se pudo guardar: ${e.message}".take(120) }
+            val arr = JSONArray()
+            bots.values.forEach { arr.put(JSONObject(it.toString())) }
+            JSONObject()
+                .put("schemaVersion", 4)
+                .put("savedAt", now)
+                .put("appVersion", "0.21-fast-maker")
+                .put("bots", arr)
+        } catch (e: Exception) {
+            lastError = "No se pudo preparar el guardado: ${e.message}".take(120)
+            return
+        }
+        val payload = snapshotJson.toString()
+        val shouldWriteExternal = backupTreeUri != null && now - lastExternalBackupAt >= 30_000L
+        if (shouldWriteExternal) lastExternalBackupAt = now
+        ioExecutor.execute {
+            try {
+                val backup = File(app.filesDir, "CryptoFutures").apply { mkdirs() }
+                val target = File(backup, "state-v1.json")
+                val tmp = File(backup, "state-v1.json.tmp")
+                tmp.writeText(payload)
+                if (!tmp.renameTo(target)) {
+                    target.writeText(tmp.readText())
+                    tmp.delete()
+                }
+                if (shouldWriteExternal) saveUserBackup(JSONObject(payload))
+            } catch (e: Exception) {
+                synchronized(lock) { lastError = "Guardado: ${e.message}".take(100) }
+            }
+        }
     }
 }

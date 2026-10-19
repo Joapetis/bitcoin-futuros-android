@@ -88,7 +88,7 @@ class MainActivity : Activity() {
                 if (page == "IA" && now - lastAiRefreshAt >= 1500L) { lastAiRefreshAt = now; updateAiPanels() }
                 liveChart?.invalidate()
             }
-            handler.postDelayed(this, 250)
+            handler.postDelayed(this, 500)
         }
     }
 
