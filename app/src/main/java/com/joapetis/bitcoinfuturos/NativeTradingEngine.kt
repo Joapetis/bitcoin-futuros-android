@@ -568,7 +568,7 @@ object NativeTradingEngine {
             val readBack = resolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                 ?: throw IllegalStateException("No se pudo verificar el archivo de respaldo")
             val verified = JSONObject(readBack)
-            if (verified.optLong("savedAt") != root.optLong("savedAt") || verified.optJSONObject("bots") != null) {
+            if (verified.optLong("savedAt") != root.optLong("savedAt") || verified.optJSONArray("bots") == null) {
                 throw IllegalStateException("El respaldo no coincide con el estado guardado")
             }
             val rows = verified.optJSONArray("bots") ?: throw IllegalStateException("Respaldo sin bots")
