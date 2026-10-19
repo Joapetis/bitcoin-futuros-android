@@ -468,6 +468,7 @@ class LearningBrain {
             .put("recent", recent).put("lessons", lessons).put("chat", chat).put("tunedAt", tunedAt)
             .put("imbEntry", imbEntry).put("persist", persistEvals).put("target", targetRate).put("stop", stopRate)
             .put("minEdge", minEdge).put("warmup", warmupSamples).put("daily", dailyLossLimit).put("mode", mode).put("hours", hours)
+            .put("fastMakerConfigVersion", 1)
     }
 
     fun load(o: JSONObject?) {
@@ -497,6 +498,16 @@ class LearningBrain {
             minEdge = o.optDouble("minEdge", minEdge).coerceIn(-0.05, 0.06)
             warmupSamples = o.optInt("warmup", 5).coerceIn(5, 20)
             dailyLossLimit = o.optDouble("daily", dailyLossLimit); mode = o.optString("mode", mode)
+            if (o.optInt("fastMakerConfigVersion", 0) < 1) {
+                // Migración única: el backup antiguo tenía TP/SL demasiado amplios para el perfil Maker rápido.
+                imbEntry = 0.12
+                persistEvals = 2
+                targetRate = 0.0022
+                stopRate = 0.0014
+                minEdge = -0.03
+                warmupSamples = 5
+                mode = "agresivo"
+            }
             blockedHoursLocal.clear()
             val hs = o.optJSONArray("hours"); if (hs != null) for (i in 0 until hs.length()) blockedHoursLocal.add(hs.optInt(i))
             shadows.clear()
